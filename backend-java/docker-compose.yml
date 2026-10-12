@@ -1,5 +1,5 @@
 services:
-  sue-server:
+  maos-server:
     build: .
     restart: unless-stopped
     ports:
@@ -7,19 +7,19 @@ services:
     volumes:
       # Everything typed lives here. Without this, a container restart loses
       # every screen the disk tier was holding.
-      - sue-workspaces:/opt/sue/workspaces
+      - maos-workspaces:/opt/maos/workspaces
     environment:
       # Every one of these is optional; none of them has a credential in it.
       # Credentials arrive at registration and stay in the process.
-      SUE_PORT: "8080"
-      SUE_PUBLIC_ADDR: "${SUE_PUBLIC_ADDR:-}"
-      SUE_AICOIN: "${SUE_AICOIN:-http://host.docker.internal:8080}"
-      SUE_PROVIDER: "${SUE_PROVIDER:-anthropic}"
-      SUE_MODEL: "${SUE_MODEL:-}"
-      SUE_AMI: "${SUE_AMI:-}"
-      SUE_INSTANCE_TYPE: "${SUE_INSTANCE_TYPE:-t4g.small}"
-      SUE_S3_BUCKET: "${SUE_S3_BUCKET:-}"
-      SUE_IDLE_MINUTES: "${SUE_IDLE_MINUTES:-30}"
+      MAOS_PORT: "8080"
+      MAOS_PUBLIC_ADDR: "${MAOS_PUBLIC_ADDR:-}"
+      MAOS_AICOIN: "${MAOS_AICOIN:-http://host.docker.internal:8080}"
+      MAOS_PROVIDER: "${MAOS_PROVIDER:-anthropic}"
+      MAOS_MODEL: "${MAOS_MODEL:-}"
+      MAOS_AMI: "${MAOS_AMI:-}"
+      MAOS_INSTANCE_TYPE: "${MAOS_INSTANCE_TYPE:-t4g.small}"
+      MAOS_S3_BUCKET: "${MAOS_S3_BUCKET:-}"
+      MAOS_IDLE_MINUTES: "${MAOS_IDLE_MINUTES:-30}"
 
 volumes:
-  sue-workspaces:
+  maos-workspaces:

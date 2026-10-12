@@ -1,4 +1,4 @@
-## sue-server, ahead-of-time compiled.
+## maos-server, ahead-of-time compiled.
 ##
 ## Two stages: GraalVM's native-image toolchain runs the Gradle build and
 ## produces a real executable, then only that executable is copied onto a
@@ -32,15 +32,15 @@ RUN ./gradlew nativeCompile --no-daemon
 ## the image for anything else to use. The JDK truststore is compiled into the
 ## binary, so outbound TLS to aicoin and AWS needs nothing from the OS.
 FROM gcr.io/distroless/base-debian12 AS runtime
-WORKDIR /opt/sue
+WORKDIR /opt/maos
 
-COPY --from=build /workspace/build/native/nativeCompile/sue-server /usr/local/bin/sue-server
+COPY --from=build /workspace/build/native/nativeCompile/maos-server /usr/local/bin/maos-server
 
 # Where accounts' folders live. Mount a volume here or everything typed is
 # lost with the container.
-VOLUME ["/opt/sue/workspaces"]
-ENV SUE_WORKSPACE=/opt/sue/workspaces
+VOLUME ["/opt/maos/workspaces"]
+ENV MAOS_WORKSPACE=/opt/maos/workspaces
 
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/sue-server"]
+ENTRYPOINT ["/usr/local/bin/maos-server"]

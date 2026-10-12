@@ -1,34 +1,42 @@
-# sue
+# maos
 
-A text editor written in aarch64 assembly, that runs two ways:
+**The Mutable AI Operating System.** A text editor written in aarch64
+assembly, which is also the machine it runs on. It runs two ways:
 
-- **hosted** — as a macOS window (or in a terminal), on top of a normal OS
-- **bare metal** — as its own kernel, with no operating system underneath it
+- **hosted** - as a macOS window (or in a terminal), on top of a normal OS
+- **bare metal** - as its own kernel, with no operating system underneath it
 
 Both modes share one source tree and one font. Every glyph on screen was
 rasterized by `font/render.S` from a bitmap font whose scanlines were written
-out by hand — no text API, no UI toolkit, no font library anywhere in the
+out by hand - no text API, no UI toolkit, no font library anywhere in the
 pipeline. The kernel has no firmware under it either: `kernel/boot.S` holds the
 first instructions the machine executes.
 
-The editor talks to one server — its own backend — and carries one credential.
+Mutable is the part that is not a slogan. An answer a model gives once is
+remembered by the server as a script; a script enough people want is compiled
+to machine code; machine code a panel of models agrees on is committed into
+this repository and installed by running devices without a restart. The editor
+is therefore not finished, by construction - what it can do is what people have
+asked it for.
+
+The editor talks to one server - its own backend - and carries one credential.
 The backend reaches models through [aicoin](https://aicoin.oeaio.com), which
 fronts Claude and the other providers, and it is the only thing that ever holds
 an AWS credential.
 
 ```
    ┌──────────────────────┐        ┌──────────────────────┐
-   │ sue (hosted)     │        │ sue (bare metal) │
+   │ maos (hosted)        │        │ maos (bare metal)    │
    │  macOS window / tty  │        │  own kernel, ramfb   │
    └──────────┬───────────┘        └──────────┬───────────┘
-              │      one sue key,         │
-              │      one protocol             │
+              │         one maos key,         │
+              │         one protocol          │
               └───────────────┬───────────────┘
                               ▼
-                   ┌──────────────────────┐
-                   │ sue-server (Java 25)   │  the only holder of secrets
-                   │ sue.oeaio.com    │
-                   └───────┬──────────┬───┘
+                   ┌─────────────────────────┐
+                   │ maos-server (Java 25)   │  the only holder of secrets
+                   │ maos.oeaio.com          │
+                   └───────┬──────────┬──────┘
                            ▼          ▼
                  aicoin proxy       EC2
                  (Claude and the    (one minimal Linux
@@ -39,7 +47,7 @@ an AWS credential.
 
 ## One property
 
-A device is configured with exactly one value: **`SUE_KEY`**.
+A device is configured with exactly one value: **`MAOS_KEY`**.
 
 The key issued at registration carries the address to reach the backend at —
 `<secret>@<host:port>` — so there is no second setting to get wrong and no
@@ -64,8 +72,8 @@ linker ship with Xcode.
 
 ```
 make                             # both hosted modes and the kernel
-java backend-java/src/SueServer.java   # the backend, straight from source
-SUE_KEY=<key> make win       # the editor, bound to that account
+java backend-java/src/MaosServer.java   # the backend, straight from source
+MAOS_KEY=<key> make win       # the editor, bound to that account
 make run                         # terminal mode: make run TEXT="HELLO WORLD"
 make boot                        # boot the kernel in QEMU, with a framebuffer
 make boot-tty                    # boot it headless, serial on your terminal
@@ -200,7 +208,7 @@ is not the model that wrote the operation. It is every model the wallet can
 reach, asked separately:
 
 ```
-sue: consortium seats 6 of 40 eligible models, across 2 provider(s)
+maos: consortium seats 6 of 40 eligible models, across 2 provider(s)
 bench: [openai:o4-mini, anthropic:claude-sonnet-5, openai:o3-mini,
         anthropic:claude-opus-5, openai:o3, anthropic:claude-haiku-4-5]
 VERDICT COMMIT - 4 of 6 members, unanimous
@@ -262,7 +270,7 @@ proxy, not a failure, and the provider-shaped path is still there for it.
 answer returned attributed and unmerged. That mode was added to aicoin for this;
 the endpoint's other two shapes both end in a single merged answer, which is
 right for prose and fatal for a vote, because a paragraph an editor wrote has
-nobody in it to count. sue used to fan out to each model itself and keep its
+nobody in it to count. maos used to fan out to each model itself and keep its
 own list of which ones were reachable — a copy of something the proxy already
 knows, going quietly out of date. What stayed on this side is what the answers
 *mean*: the quorum, the appeal, whether a hold was agreed or split. If the proxy
@@ -345,7 +353,7 @@ screenshot. Worse, a pasted token could only be withdrawn by revoking *every*
 token that wallet had issued — a token is self-verifying, so nothing about the
 token itself can be taken away.
 
-So the page shows a code instead. sue asks the proxy for an authorisation
+So the page shows a code instead. maos asks the proxy for an authorisation
 and gets back two things that are not interchangeable: the **id**, which goes in
 the code, and the **secret**, which stays here and is what the token is collected
 with. Both in the code would mean anyone who photographed the screen could
@@ -386,36 +394,36 @@ Server-side settings, all environment, none committed.
 
 | variable | meaning |
 |---|---|
-| `SUE_PORT` | listen port (default 8080) |
-| `SUE_PUBLIC_ADDR` | the address to bake into issued keys |
-| `SUE_AICOIN` | aicoin proxy base URL |
-| `SUE_PROVIDER` | which provider aicoin should route to (default `anthropic`) |
-| `SUE_MODEL` | model override (default `claude-opus-5`) |
-| `SUE_AWS_ADDR` | EC2 endpoint override, for a local or proxied endpoint |
-| `SUE_AMI` | image the account's instance runs |
-| `SUE_WAITING_DIR` | where doubted operations wait (default `waiting`) |
-| `SUE_WAIT_PEOPLE` | distinct people needed to release one (default 3) |
-| `SUE_WAIT_DAYS` | how long one waits before being forgotten (default 30) |
-| `SUE_INSTANCE_TYPE` | default `t4g.small` |
-| `SUE_WORKSPACE` | where accounts' folders live (default `workspaces`) |
-| `SUE_S3_BUCKET` | third tier of persistence; unset means disk only |
-| `SUE_IDLE_MINUTES` | terminate an idle account's instance (default 30, 0 disables) |
-| `SUE_REAP_SECONDS` | how often to sweep for idle accounts (default 60) |
+| `MAOS_PORT` | listen port (default 8080) |
+| `MAOS_PUBLIC_ADDR` | the address to bake into issued keys |
+| `MAOS_AICOIN` | aicoin proxy base URL |
+| `MAOS_PROVIDER` | which provider aicoin should route to (default `anthropic`) |
+| `MAOS_MODEL` | model override (default `claude-opus-5`) |
+| `MAOS_AWS_ADDR` | EC2 endpoint override, for a local or proxied endpoint |
+| `MAOS_AMI` | image the account's instance runs |
+| `MAOS_WAITING_DIR` | where doubted operations wait (default `waiting`) |
+| `MAOS_WAIT_PEOPLE` | distinct people needed to release one (default 3) |
+| `MAOS_WAIT_DAYS` | how long one waits before being forgotten (default 30) |
+| `MAOS_INSTANCE_TYPE` | default `t4g.small` |
+| `MAOS_WORKSPACE` | where accounts' folders live (default `workspaces`) |
+| `MAOS_S3_BUCKET` | third tier of persistence; unset means disk only |
+| `MAOS_IDLE_MINUTES` | terminate an idle account's instance (default 30, 0 disables) |
+| `MAOS_REAP_SECONDS` | how often to sweep for idle accounts (default 60) |
 
 ### Protocol
 
 What a device may say, and all it may say:
 
 ```
-POST /api/agent      X-Sue-Key
+POST /api/agent      X-Maos-Key
      {mode:"agent"|"aify", screen, scroll, rows, cursor, baseline, context} -> {text}
-POST /api/session    X-Sue-Key -> {instance}
-POST /api/teardown   X-Sue-Key -> {instance:""}
-POST /api/journal    X-Sue-Key; {screen, op|kind, at, text|word, dx, dy} -> {ok}
-GET  /api/clouds     X-Sue-Key -> {bound}
-POST /api/clouds     X-Sue-Key; {provider, ...fields} -> {provider, complete}
-GET  /api/otp        X-Sue-Key -> the pad ledger for this account
-POST /api/otp/reserve X-Sue-Key -> {pad, bits, window}
+POST /api/session    X-Maos-Key -> {instance}
+POST /api/teardown   X-Maos-Key -> {instance:""}
+POST /api/journal    X-Maos-Key; {screen, op|kind, at, text|word, dx, dy} -> {ok}
+GET  /api/clouds     X-Maos-Key -> {bound}
+POST /api/clouds     X-Maos-Key; {provider, ...fields} -> {provider, complete}
+GET  /api/otp        X-Maos-Key -> the pad ledger for this account
+POST /api/otp/reserve X-Maos-Key -> {pad, bits, window}
 ```
 
 and, from a browser rather than a device:
@@ -585,7 +593,27 @@ decides only *where* the windows fall, never what the pad contains.
 | `boot/efi.S` | a loader: it owns the machine, then hands it to the kernel |
 | `tests/efiboot.py` | `make efi-boot` — the handover, under real EFI firmware |
 | `tools/loadertree.py` | makes QEMU's device tree describe the machine this is aimed at |
-| `backend/` | the earlier assembly backend, kept until the Java one is proven |
+| `tools/mkinstall.sh` | `make install-image` — a GPT disk somebody can write and boot |
+| `crypto/tls13.S` | the TLS 1.3 key schedule, against RFC 8448's own trace |
+| `net/tlsrec.S` | the record layer: counted nonces, and the type hidden inside |
+| `tests/os/` | the OS's behaviour in Rust, which a port to another arch inherits |
+| `backend/` | the earlier assembly backend, superseded — see below |
+
+### The assembly backend, and why it is still here
+
+`backend/` is 1,853 lines of aarch64 that served the first version of this
+protocol: the registration page, a key, an agent call, a session. It was kept
+on a stated condition — until the Java one was proven — and that condition has
+been met. The editor now needs `/api/ops`, a journal field on the agent call,
+and a session that answers with a name, and none of those exist there. Pointed
+at it, the current editor would start and then find nothing it needs.
+
+It is not free to keep: it is assembled on every build, it has broken the build
+once by drifting out of step with the string helpers underneath it, and every
+rename has to pass through it. What is worth saving from it is `sigv4.S`, which
+signs AWS requests from assembly and is byte-identical to an independent
+reference — and nothing on a device will ever need that, because no device
+holds a cloud credential by design.
 
 ## Getting to bare metal
 
@@ -598,7 +626,7 @@ have to, and that is the whole of first light on that machine.
 
 There are two ways that arrives. m1n1 passes its own `boot_args` to a raw
 payload, and `kernel/arch/aarch64/bootargs.S` reads those. But m1n1 also boots
-**Linux-style images**, and sue is one now — it has the arm64 image header
+**Linux-style images**, and maos is one now — it has the arm64 image header
 — so the loader hands it a device tree with a `simple-framebuffer` node
 instead. `kernel/screen.S` reads either, and the second is both the more likely
 path on a real Mac and the one that works on every other arm64 board whose
@@ -940,7 +968,7 @@ it describes it in ACPI. So the loader walks four hops of the firmware's own
 tables (configuration table → root pointer → extended table list → the table
 signed `MCFG`) and writes the address into the tree it is building:
 
-    sue: bus at 0000004010000000
+    maos: bus at 0000004010000000
 
 `make efi-run` runs it on **this machine's own cores**, through
 Hypervisor.framework, rather than emulating a different processor. That is as
@@ -949,11 +977,11 @@ execute at EL1 on Apple silicon, which is where the kernel will run on the
 target. Emulation is the fallback for a host without it, and `-cpu cortex-a72`
 is an ARM design — not the silicon this is aimed at.
 
-    sue: EFI console is alive
-    sue: screen at 000000005c7a0000 800x600, stride 800, format 1
-    sue: bus at 000000003f000000
+    maos: EFI console is alive
+    maos: screen at 000000005c7a0000 800x600, stride 800, format 1
+    maos: bus at 000000003f000000
 
-Which is what makes `make efi-run` worth having. It boots sue the way the
+Which is what makes `make efi-run` worth having. It boots maos the way the
 target will boot it — from a disk, by firmware that owns the machine first,
 with a keyboard and a network on the USB controller and nothing virtio about
 it — in a window you can type into. That is the closest thing to the real
@@ -1110,7 +1138,7 @@ server hands out a lease against it. Then `net_send`/`net_recv` dispatch to
 whichever device the machine has, so ARP, IP, TCP and DHCP are unchanged and
 have no business knowing which wire they are on:
 
-    sue: the network gave us 10.0.2.15
+    maos: the network gave us 10.0.2.15
 
 `make network` boots a machine with **no virtio device at all** and requires a
 lease, the four packets on the wire over bulk endpoints, and the frames carrying
@@ -1151,6 +1179,34 @@ virtio-input. Expect display and serial before anything types.
 EFI does not help here. Apple's iBoot is not EFI firmware, so the EFI path is
 for the Virtualization framework and for other arm64 boards, not for this Mac.
 
+## Running it on real hardware
+
+`make install-image` writes `build/maos.img`: a GPT disk with an EFI system
+partition carrying the loader where firmware looks for it, and a second
+partition for the document. The same bytes whether it is written to a USB
+stick, attached to a virtual machine, or copied to a disk:
+
+```
+make install-image
+dd if=build/maos.img of=/dev/rdiskN bs=4m     # the whole disk, not a partition
+```
+
+`make efi-run` boots that layout under firmware on this Mac's own cores, with
+the keyboard, the disk and the network all on USB and nothing virtio about it,
+which is the closest thing to the target machine that can be sat in front of.
+
+It will not open without a key. The key is what makes a machine somebody's: it
+is issued only after a wallet and cloud access have been used, so a machine
+holding one can do everything this program is for as soon as it can reach
+anything. A machine with a key and no network still opens, with its document
+and the operations it has already installed — the two keys that need a far side
+are the only things that stop working. Pass one in with `make efi-run KEY=...`,
+or through `MAOS_KEY` in the hosted builds.
+
+The name in the top right of the bar is the account the backend authenticated
+this key as. The editor never invents it, and shows nothing when the far side
+has not answered.
+
 ## Status
 
 Verified by running it, against published test vectors where they exist:
@@ -1188,19 +1244,54 @@ Verified by running it, against published test vectors where they exist:
 - [x] **opening a site**: `open example.com` and `Cmd`+`Enter`, rendered on the
       bare-metal framebuffer over our own TCP stack
 - [x] typing during a request is no longer typing that is lost
+- [x] **the machine answers its keyboard while it is thinking**: the network
+      wait calls back into the editor, so the caret moves and the screen repaints
+      through the forty seconds a model takes. Keys that change the document are
+      held and replayed afterwards, because the answer lands on a span measured
+      before the question was asked
+- [x] **an empty screen is an answer**: `#CLEAR`, which is the only way to ask
+      for one that a model's silence cannot be mistaken for
+- [x] **"cls" is "clear"**: the quickest provider is asked, once per phrasing
+      ever, whether a request is one the server already answers; what it says is
+      written in as another pattern, so the next one is matched rather than asked
+- [x] **devices install what they have earned**: `ops_sync` fetches the machine
+      code for operations wanted often enough and installs it, so the answer
+      costs no server, no model and no round trip
+- [x] **a key means access that works**: registration signs a real call before
+      issuing one, and an account that brings no cloud of its own is lent the
+      backend's
+- [x] **the TLS 1.3 key schedule**, checked against RFC 8448's own trace: the
+      early, handshake and master secrets, both handshake traffic secrets, and a
+      write key and iv, all byte-identical to the published values
+- [x] **the tests are measured and the measurement is enforced**: the backend
+      carries a coverage floor the build fails under, and the OS's own
+      behaviour has a suite in Rust that calls the assembled code through the C
+      ABI. Nothing in it names a register, so a port to another architecture
+      inherits every assertion and only `build.rs` changes. It found two real
+      bugs on its first run
+- [x] **the editor reports what was done, not only what is there**: a run of
+      typing is one entry, a run of backspaces is one deletion, and the list
+      rides along with the request it is about rather than costing a round trip
+      of its own. The model is told that a line was typed just now, which is the
+      difference between two readings of "make it faster"
+- [x] **the TLS 1.3 record layer**: records sealed byte for byte against an
+      independent implementation, the per-record counter proved to move the
+      nonce, the content type recovered from inside the encryption where it
+      lives, and a record with one altered byte refused
 
 Next, in rough order:
 
-- [ ] **TLS 1.3 client in assembly** - the primitives are done and verified; the
-      handshake, record layer and certificate pinning are not. Until then the
-      backend reaches AWS and aicoin over TLS from Java, and the editor talks
-      to its backend in the clear
+- [ ] **the rest of the TLS 1.3 client** - the primitives, the key schedule and
+      the record layer are done and verified; the handshake itself and
+      certificate pinning are not. Until then the backend reaches AWS and
+      aicoin over TLS from Java, and the editor talks to its backend in the
+      clear
 - [ ] local persistence on the device itself, so a screen survives losing the
       backend
 - [ ] mounting the account's folders into the provisioned machine's home
       directory, so the agent works on the same files you are typing into
-- [ ] the editor emitting edits and gestures: the journal endpoint and storage
-      exist, nothing sends to them yet
+- [ ] gestures, as opposed to edits: the swipe and the tap are recorded nowhere,
+      and the journal now carries everything typed but nothing pointed at
 - [ ] provisioning on anything but AWS - the other clouds take credentials and
       are compared on price, but only EC2 is actually brought up
 - [ ] iOS gestures the macOS front end does not have yet

@@ -1,10 +1,10 @@
-# sue-server
+# maos-server
 
-The sue backend: Java 25 on Netty, matching the stack aicoin-proxy runs.
+The maos backend: Java 25 on Netty, matching the stack aicoin-proxy runs.
 
 ## Building
 
-The server is Netty, so unlike the rest of sue this half has a dependency
+The server is Netty, so unlike the rest of maos this half has a dependency
 and needs a build tool. Gradle 9.6.1, same as aicoin-proxy:
 
 ```
@@ -31,24 +31,24 @@ belongs in this repository.
 
 | variable | meaning |
 |---|---|
-| `SUE_PORT` | listen port (default 8080) |
-| `SUE_PUBLIC_ADDR` | the address baked into issued keys |
-| `SUE_AICOIN` | aicoin proxy base URL |
-| `SUE_PROVIDER` | default provider aicoin routes to |
-| `SUE_MODEL` | default model override |
-| `SUE_AWS_ADDR` | EC2 endpoint override, for a local or proxied endpoint |
-| `SUE_AMI` | image the account's instance runs |
-| `SUE_INSTANCE_TYPE` | default `t4g.small` |
-| `SUE_WORKSPACE` | where accounts' folders live |
-| `SUE_S3_BUCKET` | third tier of persistence |
-| `SUE_IDLE_MINUTES` | terminate an idle account's instance (0 disables) |
-| `SUE_REAP_SECONDS` | how often to sweep |
+| `MAOS_PORT` | listen port (default 8080) |
+| `MAOS_PUBLIC_ADDR` | the address baked into issued keys |
+| `MAOS_AICOIN` | aicoin proxy base URL |
+| `MAOS_PROVIDER` | default provider aicoin routes to |
+| `MAOS_MODEL` | default model override |
+| `MAOS_AWS_ADDR` | EC2 endpoint override, for a local or proxied endpoint |
+| `MAOS_AMI` | image the account's instance runs |
+| `MAOS_INSTANCE_TYPE` | default `t4g.small` |
+| `MAOS_WORKSPACE` | where accounts' folders live |
+| `MAOS_S3_BUCKET` | third tier of persistence |
+| `MAOS_IDLE_MINUTES` | terminate an idle account's instance (0 disables) |
+| `MAOS_REAP_SECONDS` | how often to sweep |
 
 ## Shape
 
 | file | what it does |
 |---|---|
-| `SueServer.java` | Netty transport and routing; every route on a virtual thread |
+| `MaosServer.java` | Netty transport and routing; every route on a virtual thread |
 | `Accounts.java` | the account store and the one key that leaves the process |
 | `Aicoin.java` | the route to a model, through the account's wallet |
 | `Router.java` | which model answers, and model-to-model handoff |
