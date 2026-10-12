@@ -69,6 +69,7 @@ public final class MaosServer {
     private final Recogniser recogniser;
     private final Refusals refusals;
     private final Preflight preflight;
+    private final Workers workers;
     private final Consensus consensus = new Consensus();
     private final Behaviours behaviours;
     private final Catalogue catalogue;
@@ -94,8 +95,13 @@ public final class MaosServer {
         // The tree this machine is built from, so a question about the machine
         // can be answered from it. ".." because the backend runs one directory
         // down, the same place MAOS_OPS_DIR is relative to.
-        this.preflight = new Preflight(aicoin,
-                java.nio.file.Path.of(env("MAOS_SOURCE_DIR", "..")));
+        var source = java.nio.file.Path.of(env("MAOS_SOURCE_DIR", ".."));
+        this.preflight = new Preflight(aicoin, source);
+        // A tree per person, on their own branch, kept warm. See Workers: the
+        // sources that describe somebody's machine are the ones their machine
+        // is built from, and working them out is the same work every time.
+        this.workers = new Workers(source,
+                java.nio.file.Path.of(env("MAOS_WORKERS_DIR", "../.maos-workers")));
         this.aws = new Aws(
                 env("MAOS_AWS_ADDR", ""),
                 env("MAOS_AMI", ""),
@@ -1286,7 +1292,8 @@ public final class MaosServer {
             // source that makes the whole request fail.
             int room = Integer.parseInt(env("MAOS_PROMPT_LIMIT", "400000"))
                     - prompt.length() - context.length() - 8_000;
-            prompt.append(preflight.gather(account.wallet(), instruction, room));
+            prompt.append(preflight.gather(account.wallet(), instruction, room,
+                    workers.forAccount(account.id())));
         }
         prompt.append("THE EDITOR IS:\n")
               .append("  text size ").append(parseInt(in.getOrDefault("scale", "2"), 2))

@@ -8,6 +8,11 @@ app/tty
 app/window
 backend/maos-server
 
+# The pool of per-person source trees: worktrees of this repository, made on
+# demand and dropped by the pool. What is in one is either in git already or is
+# somebody's own uncommitted change, and neither belongs here.
+.maos-workers/
+
 # secrets - never commit credentials of any kind
 *.token
 *.pem

@@ -104,39 +104,64 @@ final class Preflight {
      *             outcome worse than not sending them.
      */
     String gather(String wallet, String instruction, int room) {
-        if (!available()) return "";
+        return gather(wallet, instruction, room, null);
+    }
+
+    /**
+     * The same, in somebody's own tree and with what that tree already knows.
+     *
+     * Two things change when a worker is given. The files are read from the
+     * branch their machine is built from, which is the only tree whose sources
+     * describe the machine they are using. And a question asked before in that
+     * tree is not asked again - the answer to "which files is this about" does
+     * not change while the tree does not, so paying a model to work it out
+     * twice is paying to learn the same thing twice.
+     */
+    String gather(String wallet, String instruction, int room, Workers.Worker worker) {
+        List<String> files = worker == null ? manifest : worker.manifest();
+        Path tree = worker == null ? root : worker.tree();
+        if (files.isEmpty()) return "";
         if (instruction == null || instruction.isBlank()) return "";
         if (instruction.strip().split("\\s+").length < MIN_WORDS) return "";
         if (room < 2_000) return "";
 
-        String said;
-        try {
-            said = aicoin.text(wallet, prompt(instruction), null, true);
-        } catch (Exception x) {
-            System.out.printf("maos: could not ask what \"%s\" needs read: %s%n",
-                    instruction, x.getMessage());
-            return "";
-        }
-        if (said == null || said.isBlank()
-                || said.strip().toLowerCase(Locale.ROOT).startsWith("none")) {
-            return "";
+        List<String> named = worker == null ? null : worker.recall(instruction);
+        if (named == null) {
+            String said;
+            try {
+                said = aicoin.text(wallet, prompt(instruction, files), null, true);
+            } catch (Exception x) {
+                System.out.printf("maos: could not ask what \"%s\" needs read: %s%n",
+                        instruction, x.getMessage());
+                return "";
+            }
+            if (said == null || said.isBlank()
+                    || said.strip().toLowerCase(Locale.ROOT).startsWith("none")) {
+                if (worker != null) worker.learned(instruction, List.of());
+                return "";
+            }
+            named = List.of(said.split("\n"));
         }
 
         var out = new StringBuilder();
+        var used = new ArrayList<String>();
         int budget = room;
         int taken = 0;
-        for (String line : said.split("\n")) {
+        for (String line : named) {
             if (taken >= MAX_FILES || budget <= 0) break;
-            String body = read(line.strip());
+            String body = read(tree, line.strip());
             if (body == null) continue;
             if (body.length() > budget) continue;
             out.append("----- ").append(line.strip()).append('\n')
                .append(body).append("\n\n");
             budget -= body.length();
+            used.add(line.strip());
             taken++;
         }
+        if (worker != null) worker.learned(instruction, used);
         if (taken == 0) return "";
-        System.out.printf("maos: \"%s\" reads %d file(s)%n", instruction, taken);
+        System.out.printf("maos: \"%s\" reads %d file(s)%s%n", instruction, taken,
+                worker == null ? "" : " in " + worker.branch());
         return """
                 THE PART OF THIS SYSTEM THE QUESTION IS ABOUT
 
@@ -157,11 +182,11 @@ final class Preflight {
      * symbolic link, or by being absolute, and normalising first collapses all
      * three into the same question - is this still under the root.
      */
-    private String read(String named) {
+    private String read(Path tree, String named) {
         if (named.isBlank() || named.startsWith("#") || named.contains(" ")) return null;
         try {
-            Path p = root.resolve(named).normalize();
-            if (!p.startsWith(root) || !Files.isRegularFile(p)) return null;
+            Path p = tree.resolve(named).normalize();
+            if (!p.startsWith(tree) || !Files.isRegularFile(p)) return null;
             String body = Files.readString(p);
             // Something whose bytes are not text is a blob somebody generated,
             // and a model reading one learns nothing but spends the budget a
@@ -175,7 +200,7 @@ final class Preflight {
         }
     }
 
-    private String prompt(String instruction) {
+    private String prompt(String instruction, List<String> files) {
         return """
                 Somebody using a text editor that is also its own operating
                 system has asked for this:
@@ -204,7 +229,7 @@ final class Preflight {
 
                 Name nothing you do not need. Every file you name is read in
                 full and takes room from the ones that mattered.
-                """.formatted(instruction, String.join("\n", manifest), MAX_FILES);
+                """.formatted(instruction, String.join("\n", files), MAX_FILES);
     }
 
     /**
@@ -215,7 +240,7 @@ final class Preflight {
      * not a checkout of produces an empty list, and an empty list turns this
      * whole mechanism off rather than making it wrong.
      */
-    private static List<String> manifest(Path root) {
+    static List<String> manifest(Path root) {
         var out = new ArrayList<String>();
         try {
             var p = new ProcessBuilder("git", "ls-files")
