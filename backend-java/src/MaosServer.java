@@ -1176,7 +1176,7 @@ public final class MaosServer {
 
 
     /**
-     * What a text editor can hold.
+     * What a document on this screen can hold.
      *
      * A model writing code fences is doing the right thing for a chat window
      * and the wrong thing here: this reply is pasted straight into a document,
@@ -1264,7 +1264,8 @@ public final class MaosServer {
 
         prompt.append(switch (mode) {
             case "swipe" -> """
-                    You are inside maos, a text editor. The user swiped across some words \
+                    You are inside maos, which is an application and the operating system it \
+                    runs on - the same program either way. The user swiped across some words \
                     and wants something done with them - they did not say what, and the gesture \
                     is the whole request. Work out from the words themselves, the surrounding \
                     screen and what they have been doing what would actually help: explain it, \
@@ -1272,7 +1273,8 @@ public final class MaosServer {
                     answer is that it is not clear, say so in one line rather than guessing at \
                     length.""";
             case "aify" -> """
-                    You are inside maos, a text editor. The user wrote an instruction and it \
+                    You are inside maos, which is an application and the operating system it \
+                    runs on - the same program either way. The user wrote an instruction and it \
                     is about to be REPLACED by your reply, in place, where it stands. Produce \
                     exactly what should be there instead of it and nothing else - no preamble, no \
                     explanation, no fences, no restating the instruction. If they wrote \

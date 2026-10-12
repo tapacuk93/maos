@@ -1,10 +1,25 @@
 # maos
 
-**The Mutable AI Operating System.** A text editor written in aarch64
-assembly, which is also the machine it runs on. It runs two ways:
+**The Mutable AI Operating System.** An application and the operating system it
+runs on, written in aarch64 assembly. The same program either way:
 
 - **hosted** - as a macOS window (or in a terminal), on top of a normal OS
 - **bare metal** - as its own kernel, with no operating system underneath it
+
+The thing on screen is a document, because a document is the one interface that
+does not have to be designed for each new thing it is asked to do. You write
+what you want and the machine does it: a program, a page off the web, a machine
+brought up in a datacentre to run something, a change to the editor itself. The
+document is the command line and the canvas at once, and the application is not
+a text editor in the sense of a program for editing text - it is the surface
+this whole system is used through.
+
+Mutable is the part that is not a slogan. An answer a model gives once is
+remembered by the server as a script; a script enough people want is compiled to
+machine code; machine code a panel of models agrees on is committed into this
+repository and installed by running devices without a restart. Ask for something
+the machine cannot do and the machine is what changes. It is therefore not
+finished, by construction - what it can do is what people have asked it for.
 
 Both modes share one source tree and one font. Every glyph on screen was
 rasterized by `font/render.S` from a bitmap font whose scanlines were written
@@ -12,14 +27,7 @@ out by hand - no text API, no UI toolkit, no font library anywhere in the
 pipeline. The kernel has no firmware under it either: `kernel/boot.S` holds the
 first instructions the machine executes.
 
-Mutable is the part that is not a slogan. An answer a model gives once is
-remembered by the server as a script; a script enough people want is compiled
-to machine code; machine code a panel of models agrees on is committed into
-this repository and installed by running devices without a restart. The editor
-is therefore not finished, by construction - what it can do is what people have
-asked it for.
-
-The editor talks to one server - its own backend - and carries one credential.
+It talks to one server - its own backend - and carries one credential.
 The backend reaches models through [aicoin](https://aicoin.oeaio.com), which
 fronts Claude and the other providers, and it is the only thing that ever holds
 an AWS credential.

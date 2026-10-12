@@ -2,6 +2,12 @@
 
 The maos backend: Java 25 on Netty, matching the stack aicoin-proxy runs.
 
+It is the half of the system that holds things. maos itself is an application
+and the operating system it runs on, in aarch64 assembly, with no dependencies
+and no credentials; this is where the wallet, the cloud access, the accounts and
+the operations people have taught it live. The device carries one key and knows
+none of the rest.
+
 ## Building
 
 The server is Netty, so unlike the rest of maos this half has a dependency
