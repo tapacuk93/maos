@@ -68,6 +68,7 @@ public final class MaosServer {
     private final Scripts scripts = new Scripts();
     private final Recogniser recogniser;
     private final Refusals refusals;
+    private final Preflight preflight;
     private final Consensus consensus = new Consensus();
     private final Behaviours behaviours;
     private final Catalogue catalogue;
@@ -90,6 +91,11 @@ public final class MaosServer {
         this.recogniser = new Recogniser(aicoin, scripts);
         this.refusals = new Refusals(
                 java.nio.file.Path.of(env("MAOS_REFUSALS_DIR", "refusals")));
+        // The tree this machine is built from, so a question about the machine
+        // can be answered from it. ".." because the backend runs one directory
+        // down, the same place MAOS_OPS_DIR is relative to.
+        this.preflight = new Preflight(aicoin,
+                java.nio.file.Path.of(env("MAOS_SOURCE_DIR", "..")));
         this.aws = new Aws(
                 env("MAOS_AWS_ADDR", ""),
                 env("MAOS_AMI", ""),
@@ -1265,6 +1271,17 @@ public final class MaosServer {
  * only half of it. The same goes for a request to put something back - "normal
  * size" means something different depending on where it is now.
  */
+/*
+ * And whatever answering this needs to have read.
+ *
+ * One quick call decides which files the question is about, and they go in
+ * ahead of everything else. Without it the prompt describes the editor and
+ * cannot describe the machine, so a request to change how the machine behaves
+ * could only ever be answered with a paragraph about how it behaves.
+ */
+        if (!instruction.isBlank()) {
+            prompt.append(preflight.gather(account.wallet(), instruction));
+        }
         prompt.append("THE EDITOR IS:\n")
               .append("  text size ").append(parseInt(in.getOrDefault("scale", "2"), 2))
               .append(" of 8\n")
