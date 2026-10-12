@@ -1278,6 +1278,14 @@ public final class MaosServer {
  * size" means something different depending on where it is now.
  */
 /*
+ * What this answer is judged to need, deciding what follows.
+ *
+ * Undecided - no model, no repository, a request too short to be about the
+ * machine - means everything, because a mechanism for choosing less must never
+ * become a mechanism for sending nothing.
+ */
+        var needs = Preflight.Needs.undecided();
+/*
  * And whatever answering this needs to have read.
  *
  * One quick call decides which files the question is about, and they go in
@@ -1292,21 +1300,30 @@ public final class MaosServer {
             // source that makes the whole request fail.
             int room = Integer.parseInt(env("MAOS_PROMPT_LIMIT", "400000"))
                     - prompt.length() - context.length() - 8_000;
-            prompt.append(preflight.gather(account.wallet(), instruction, room,
-                    workers.forAccount(account.id())));
+            var gathered = preflight.decide(account.wallet(), instruction, room,
+                    workers.forAccount(account.id()));
+            prompt.append(gathered.text());
+            needs = gathered.needs();
         }
         prompt.append("THE EDITOR IS:\n")
               .append("  text size ").append(parseInt(in.getOrDefault("scale", "2"), 2))
               .append(" of 8\n")
               .append("  on screen ").append(screen).append(" of ")
               .append(in.getOrDefault("screens", "1")).append("\n\n");
-        prompt.append(refusals.briefing(account.id()));
-        prompt.append(journal.briefing(account, screen));
-        prompt.append(runner.briefing(account));
-        prompt.append(agents.briefing(account)).append('\n');
-        prompt.append(account.clouds().briefing()).append('\n');
-        prompt.append(Machines.briefing(account.clouds().available()));
-        prompt.append(AwsAgent.briefing(account.region())).append('\n');
+        // Each of these used to go on every request. Fourteen thousand
+        // characters of what this account can run work on, in front of "make
+        // this sentence shorter" - which is not only waste: a model reading
+        // five briefings it does not need attends to five things that are not
+        // the question.
+        if (needs.wants("refusals")) prompt.append(refusals.briefing(account.id()));
+        if (needs.wants("history")) prompt.append(journal.briefing(account, screen));
+        if (needs.wants("machines")) prompt.append(runner.briefing(account));
+        if (needs.wants("agents")) prompt.append(agents.briefing(account)).append('\n');
+        if (needs.wants("clouds")) {
+            prompt.append(account.clouds().briefing()).append('\n');
+            prompt.append(Machines.briefing(account.clouds().available()));
+            prompt.append(AwsAgent.briefing(account.region())).append('\n');
+        }
         prompt.append("CURRENT SCREEN:\n").append(context);
 
         // A screen bound to a widget is not asking for text: what is typed
@@ -1423,9 +1440,9 @@ public final class MaosServer {
         // goes last: buried in the middle, between the cloud inventory and the
         // model catalogue, it was simply not acted on.
         String base = prompt.toString()
-                + "\n\n" + catalogue.briefing()
-                + stats.briefing(names, category)
-                + (shareable ? scripts.briefing() : "")
+                + (needs.wants("models") ? "\n\n" + catalogue.briefing()
+                                         + stats.briefing(names, category) : "")
+                + (shareable && needs.wants("operations") ? scripts.briefing() : "")
                 + (instruction.isBlank() ? "" : WHOLE_BRIEFING);
 
         // A second ask about the same screen within a minute is rarely a

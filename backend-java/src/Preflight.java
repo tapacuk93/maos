@@ -3,6 +3,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * The call before the call: what does answering this need to have read?
@@ -62,6 +63,52 @@ final class Preflight {
     static final int DEFAULT_ROOM = 360_000;
 
     /**
+     * The kinds of context that are not files.
+     *
+     * A question needs some of these and not others, and until now it got all
+     * of them: every request carried what this person has been doing, what
+     * clouds they can reach, what machines cost, what the server already
+     * answers and what each model has been like at the work. Fourteen thousand
+     * characters of it, in front of "make this sentence shorter".
+     *
+     * That is not only waste. A model reading five briefings it does not need
+     * is a model attending to five things that are not the question, and the
+     * cost of the irrelevant ones is paid by the relevant one.
+     *
+     * Named in the vocabulary the asking model sees, with one line each saying
+     * what it is for. The names are deliberately about what somebody would want
+     * them for rather than about which class produces them.
+     */
+    static final Map<String, String> KINDS = new java.util.LinkedHashMap<>(Map.of(
+            "history", "what this person has been typing and pressing just now",
+            "clouds", "which clouds this account can run work on, and what sizes cost",
+            "machines", "what the backend can bring up, and how to ask for it",
+            "operations", "what the server already answers without a model",
+            "models", "what each model has been like at this kind of work",
+            "refusals", "what this person has told the system to stop doing",
+            "agents", "the machines this account has volunteered to do work"));
+
+    /**
+     * What a question turned out to need: files, and kinds of context.
+     *
+     * Empty means nothing was decided - no model, no repository, a request too
+     * short to be about the machine - and an empty answer means the caller
+     * should send what it always sent. A mechanism for choosing less must never
+     * turn into a mechanism for sending nothing.
+     */
+    record Needs(List<String> files, java.util.Set<String> kinds, boolean decided) {
+
+        static Needs undecided() {
+            return new Needs(List.of(), java.util.Set.of(), false);
+        }
+
+        /** Does the answer need this?  Everything, when nothing was decided. */
+        boolean wants(String kind) {
+            return !decided || kinds.contains(kind);
+        }
+    }
+
+    /**
      * Below this many words a request is about the document, not the machine.
      *
      * Cheap and roughly right. "fix this" is about the screen in front of them
@@ -117,13 +164,22 @@ final class Preflight {
      * not change while the tree does not, so paying a model to work it out
      * twice is paying to learn the same thing twice.
      */
+    /** The text to splice in, when the caller only wants that. */
     String gather(String wallet, String instruction, int room, Workers.Worker worker) {
+        return decide(wallet, instruction, room, worker).text();
+    }
+
+    /** What was gathered, and what else the answer was judged to need. */
+    record Gathered(String text, Needs needs) {}
+
+    Gathered decide(String wallet, String instruction, int room, Workers.Worker worker) {
         List<String> files = worker == null ? manifest : worker.manifest();
         Path tree = worker == null ? root : worker.tree();
-        if (files.isEmpty()) return "";
-        if (instruction == null || instruction.isBlank()) return "";
-        if (instruction.strip().split("\\s+").length < MIN_WORDS) return "";
-        if (room < 2_000) return "";
+        var nothing = new Gathered("", Needs.undecided());
+        if (files.isEmpty()) return nothing;
+        if (instruction == null || instruction.isBlank()) return nothing;
+        if (instruction.strip().split("\\s+").length < MIN_WORDS) return nothing;
+        if (room < 2_000) return nothing;
 
         List<String> named = worker == null ? null : worker.recall(instruction);
         if (named == null) {
@@ -131,23 +187,28 @@ final class Preflight {
             try {
                 said = aicoin.text(wallet, prompt(instruction, files), null, true);
             } catch (Exception x) {
-                System.out.printf("maos: could not ask what \"%s\" needs read: %s%n",
+                System.out.printf("maos: could not ask what \"%s\" needs: %s%n",
                         instruction, x.getMessage());
-                return "";
+                return nothing;
             }
-            if (said == null || said.isBlank()
-                    || said.strip().toLowerCase(Locale.ROOT).startsWith("none")) {
-                if (worker != null) worker.learned(instruction, List.of());
-                return "";
-            }
+            if (said == null || said.isBlank()) return nothing;
             named = List.of(said.split("\n"));
         }
 
+        var kinds = new java.util.LinkedHashSet<String>();
+        var paths = new ArrayList<String>();
+        for (String line : named) {
+            String word = line.strip().toLowerCase(Locale.ROOT);
+            if (KINDS.containsKey(word)) kinds.add(word);
+            else paths.add(line.strip());
+        }
+        var needs = new Needs(List.copyOf(paths), java.util.Set.copyOf(kinds), true);
+        if (worker != null) worker.learned(instruction, named);
+
         var out = new StringBuilder();
-        var used = new ArrayList<String>();
         int budget = room;
         int taken = 0;
-        for (String line : named) {
+        for (String line : paths) {
             if (taken >= MAX_FILES || budget <= 0) break;
             String body = read(tree, line.strip());
             if (body == null) continue;
@@ -155,14 +216,13 @@ final class Preflight {
             out.append("----- ").append(line.strip()).append('\n')
                .append(body).append("\n\n");
             budget -= body.length();
-            used.add(line.strip());
             taken++;
         }
-        if (worker != null) worker.learned(instruction, used);
-        if (taken == 0) return "";
-        System.out.printf("maos: \"%s\" reads %d file(s)%s%n", instruction, taken,
+        System.out.printf("maos: \"%s\" needs %d file(s) and %s%s%n", instruction, taken,
+                kinds.isEmpty() ? "no other context" : kinds,
                 worker == null ? "" : " in " + worker.branch());
-        return """
+        if (taken == 0) return new Gathered("", needs);
+        return new Gathered("""
                 THE PART OF THIS SYSTEM THE QUESTION IS ABOUT
 
                 These are the actual sources of the machine they are using, as
@@ -171,7 +231,7 @@ final class Preflight {
                 here, say which file you would want rather than guessing at its
                 contents.
 
-                """ + out;
+                """ + out, needs);
     }
 
     /**
@@ -201,35 +261,63 @@ final class Preflight {
     }
 
     private String prompt(String instruction, List<String> files) {
+        var kinds = new StringBuilder();
+        for (var e : KINDS.entrySet()) {
+            kinds.append("    ").append(e.getKey())
+                 .append(" - ").append(e.getValue()).append('\n');
+        }
         return """
                 Somebody using a text editor that is also its own operating
                 system has asked for this:
 
                     %s
 
-                Answering it may need you to have read part of the system's own
-                source. These are its files:
+                Answering it well may need things they did not say. Your job is
+                to decide which, before the model that does the work is asked -
+                it will be given exactly what you name and nothing else, so
+                this is the whole of what it will know beyond their screen and
+                what they typed.
+
+                You may name two sorts of thing, one per line, in any order.
+
+                The first is the system's own source. The machine they are
+                using is these files:
 
                 %s
-                Which of them does answering this question actually require?
 
-                Reply with their paths, copied exactly, one per line, at most
-                %d of them. Reply with the single word none if the question is
-                about the text they are editing rather than about the behaviour
-                of the system itself - which is the common case and costs
-                nothing to get right.
+                The second is what is true right now rather than what is
+                written down:
 
-                Choose the files where the behaviour they are describing is
-                implemented, not the ones whose names contain the same words. A
+                %s
+                Name only what answering this actually requires.
+
+                Most requests need neither. Somebody fixing a sentence, writing
+                a function or asking a question about their own text needs the
+                screen they already have - reply with the single word none, and
+                that is the common and correct answer.
+
+                Name a source file when the request would change how the
+                machine behaves, or asks why it behaves as it does. Choose where
+                the behaviour is implemented, not where the words match: a
                 question about the keyboard on real hardware is about the driver
-                that reads it, not about the file that lists key names. A
-                question that would change what the editor does needs the editor
-                core and, usually, the one place that decides what a reply may
-                ask for.
+                that reads it, not the file that lists key names.
 
-                Name nothing you do not need. Every file you name is read in
-                full and takes room from the ones that mattered.
-                """.formatted(instruction, String.join("\n", files), MAX_FILES);
+                Name history when the request refers to something that just
+                happened - "undo that", "what I typed before", "put it back" -
+                or when what they want depends on what they were doing rather
+                than on what is on the screen now.
+
+                Name clouds, machines or agents only for a request about running
+                something somewhere. Name operations when they are asking what
+                the system can already do, or asking for something that sounds
+                like it might already exist. Name models when the request is
+                about which model should answer. Name refusals when they are
+                taking something back or asking what they have taken back.
+
+                Every line you name is read in full and takes room from the
+                others, and every one that was not needed is something the
+                answering model has to read past to reach the question.
+                """.formatted(instruction, String.join("\n", files), kinds);
     }
 
     /**

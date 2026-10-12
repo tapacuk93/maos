@@ -76,6 +76,38 @@ class PreflightTest {
     }
 
     @Test
+    void whenNothingWasDecidedEverythingIsStillSent() {
+        // The one property that keeps this from being a way to send nothing: a
+        // request that never reached a model, or reached one that did not
+        // answer, must get the context it always got.
+        var undecided = Preflight.Needs.undecided();
+        for (String kind : Preflight.KINDS.keySet()) {
+            assertTrue(undecided.wants(kind), kind + " has to survive an undecided answer");
+        }
+    }
+
+    @Test
+    void aDecidedAnswerSendsWhatItNamedAndNoMore() {
+        var needs = new Preflight.Needs(java.util.List.of("editor/editor.S"),
+                java.util.Set.of("history"), true);
+        assertTrue(needs.wants("history"));
+        assertFalse(needs.wants("clouds"), "a question about typing is not about EC2");
+        assertFalse(needs.wants("models"));
+    }
+
+    @Test
+    void theVocabularyIsAboutWhatSomebodyWouldWantItFor() {
+        // Every kind the server gates on has to be one the asking model was
+        // offered, or it is a briefing that can never be asked for and will
+        // therefore never be sent.
+        for (String gated : new String[]{"history", "clouds", "machines",
+                                         "operations", "models", "refusals", "agents"}) {
+            assertTrue(Preflight.KINDS.containsKey(gated),
+                    gated + " is gated on but never offered");
+        }
+    }
+
+    @Test
     void itCannotNameAnythingOutsideTheProject(@TempDir Path dir) throws Exception {
         Files.writeString(dir.resolve("secret"), "not yours");
         var inner = Files.createDirectory(dir.resolve("inner"));
