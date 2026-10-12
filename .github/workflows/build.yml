@@ -37,14 +37,11 @@ jobs:
           distribution: graalvm
           java-version: '25'
 
-      - name: Gradle cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ hashFiles('backend-java/*.gradle') }}
-          restore-keys: gradle-
+      # Gradle itself, because the wrapper is deliberately not in this
+      # repository - see .gitignore. The action brings a gradle and keeps the
+      # dependency cache, which is what the wrapper would have been used for.
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
@@ -62,7 +59,7 @@ jobs:
         run: make kernel
 
       - name: The backend, with its coverage floor
-        run: cd backend-java && ./gradlew --no-daemon check coverage
+        run: cd backend-java && gradle --no-daemon check coverage
 
       - name: The OS behaviour, from the Rust suite
         run: cd tests/os && cargo test --no-fail-fast
