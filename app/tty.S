@@ -89,7 +89,7 @@ _main:
         ret
 
         CSTR
-default_msg:    .asciz "SUE"
+default_msg:    .asciz "MAOS"
 
         BSS
         .p2align 4

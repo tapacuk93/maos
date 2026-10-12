@@ -1,5 +1,5 @@
 /*
- * efi.S - sue as an EFI application.
+ * efi.S - maos as an EFI application.
  *
  * The Virtualization framework's virtio console has never carried a byte for
  * this kernel, and several rounds of narrowing established that the device
@@ -668,28 +668,28 @@ kernel_end:
         .section .rdata,"dr"
         .p2align 1
 hello:
-        .short  's', 'u', 'e', ':', ' '
+        .short  'm', 'a', 'o', 's', ':', ' '
         .short  'E', 'F', 'I', ' ', 'c', 'o', 'n', 's', 'o', 'l', 'e', ' '
         .short  'i', 's', ' ', 'a', 'l', 'i', 'v', 'e'
         .short  13, 10, 0
 m_screen:
-        .short  's', 'u', 'e', ':', ' '
+        .short  'm', 'a', 'o', 's', ':', ' '
         .short  's', 'c', 'r', 'e', 'e', 'n', ' ', 'a', 't', ' ', 0
 m_space:  .short ' ', 0
 m_by:     .short 'x', 0
 m_stride: .short ',', ' ', 's', 't', 'r', 'i', 'd', 'e', ' ', 0
 m_format: .short ',', ' ', 'f', 'o', 'r', 'm', 'a', 't', ' ', 0
-m_bus: .short 's','u','e',':',' ','b','u','s',' ','a','t',' ',0
+m_bus: .short 'm','a','o','s',':',' ','b','u','s',' ','a','t',' ',0
 m_nl:     .short 13, 10, 0
 m_blt:
-        .short  's', 'u', 'e', ':', ' '
+        .short  'm', 'a', 'o', 's', ':', ' '
         .short  'd', 'i', 's', 'p', 'l', 'a', 'y', ' ', 'i', 's'
         .short  ' ', 'b', 'l', 't', ' ', 'o', 'n', 'l', 'y', 13, 10, 0
 m_drawn:
-        .short  's', 'u', 'e', ':', ' '
+        .short  'm', 'a', 'o', 's', ':', ' '
         .short  'd', 'r', 'a', 'w', 'n', 13, 10, 0
 m_nogop:
-        .short  's', 'u', 'e', ':', ' '
+        .short  'm', 'a', 'o', 's', ':', ' '
         .short  'n', 'o', ' ', 'd', 'i', 's', 'p', 'l', 'a', 'y', 13, 10, 0
 
 /*

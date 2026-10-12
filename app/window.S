@@ -57,6 +57,9 @@
         bl      _class_addMethod
 .endm
 
+#define SYS_EXIT        1
+#define SYS_WRITE       4
+
         CODE
         .p2align 2
         .globl  _main
@@ -71,7 +74,34 @@ _main:
 
         mov     x27, x0                 /* argc/argv are unused; envp is not */
         mov     x0, x2
-        bl      SYM(env_init)           /* SUE_BACKEND / SUE_KEY */
+        bl      SYM(env_init)           /* MAOS_BACKEND / MAOS_KEY */
+
+/*
+ * An identity, or no editor.
+ *
+ * The key is what makes this machine somebody's: it says an account exists,
+ * which was only issued after a wallet and a cloud were checked. Opening
+ * without one gives somebody a text editor that cannot do any of the things
+ * this program is for, and lets them get far enough into a document to be
+ * annoyed about it.
+ *
+ * This is a check for a key and not for a network. A machine with a key and no
+ * link opens, with its document and the operations it has already installed -
+ * see backend_have_key for why that distinction is the whole of it.
+ */
+        bl      SYM(backend_have_key)
+        cbnz    w0, 1f
+        LEA     x0, m_nokey
+        bl      SYM(str_len)
+        mov     w2, w0
+        LEA     x1, m_nokey
+        mov     x0, #2                  /* stderr: this is not output */
+        mov     x16, #SYS_WRITE
+        svc     #0x80
+        mov     x0, #1
+        mov     x16, #SYS_EXIT
+        svc     #0x80
+1:
         mov     x0, x27
         bl      SYM(editor_init)
         bl      SYM(applet_clear)
@@ -91,6 +121,8 @@ _main:
 
         /* What everyone else decided about objects like these. */
         bl      SYM(behaviour_sync)
+        /* And what this machine no longer has to ask anybody about. */
+        bl      SYM(ops_sync)
 /*
  * Whatever was last written, and nothing else.
  *
@@ -125,8 +157,8 @@ _main:
         ADDM    x27, s_keyDown, view_key_down, t_void_id
         ADDM    x27, s_performKeyEquivalent, view_perform_key_equiv, t_bool_id
         ADDM    x27, s_acceptsFirstResponder, view_accepts_first, t_bool
-        ADDM    x27, s_sueFinish, view_sue_finish, t_void
-        ADDM    x27, s_sueBlink, view_sue_blink, t_void_id
+        ADDM    x27, s_maosFinish, view_maos_finish, t_void
+        ADDM    x27, s_maosBlink, view_maos_blink, t_void_id
         ADDM    x27, s_mouseDown, view_mouse_down, t_void_id
         ADDM    x27, s_mouseDragged, view_mouse_dragged, t_void_id
         ADDM    x27, s_mouseUp, view_mouse_up, t_void_id
@@ -176,14 +208,14 @@ _main:
 
         CLS     s_NSTimer               /* half a second, forever: the caret */
         mov     x27, x0
-        LEA     x0, s_sueBlink
+        LEA     x0, s_maosBlink
         bl      _sel_registerName
         mov     x28, x0
         LEA     x0, s_scheduledTimer
         bl      _sel_registerName
         mov     x1, x0
         mov     x2, x26                 /* target: the view */
-        mov     x3, x28                 /* selector: sueBlink: */
+        mov     x3, x28                 /* selector: maosBlink: */
         mov     x4, #0                  /* no userInfo */
         mov     x5, #1                  /* repeats */
         fmov    d0, #0.5
@@ -502,7 +534,7 @@ SYM(app_finish):
         LEA     x9, view_slot
         ldr     x19, [x9]
         cbz     x19, 1f
-        LEA     x0, s_sueFinish     /* the selector to run over there */
+        LEA     x0, s_maosFinish     /* the selector to run over there */
         bl      _sel_registerName
         mov     x20, x0
         LEA     x0, s_performOnMain
@@ -517,20 +549,20 @@ SYM(app_finish):
         ldp     x29, x30, [sp], #48
         ret
 
-/* - (void)sueFinish - the main-thread half, installed on the view class */
+/* - (void)maosFinish - the main-thread half, installed on the view class */
         .p2align 2
-view_sue_finish:
+view_maos_finish:
         b       SYM(async_finish)
 
 /*
- * - (void)sueBlink - the caret's phase, twice a second.
+ * - (void)maosBlink - the caret's phase, twice a second.
  *
  * The editor decides whether anything changed: while a request is out there is
  * no caret to blink, so it says no and the screen is left alone.  A blink
  * during a wait would say "ready for you" at exactly the wrong moment.
  */
         .p2align 2
-view_sue_blink:
+view_maos_blink:
         stp     x29, x30, [sp, #-48]!
         mov     x29, sp
         stp     x19, x20, [sp, #16]
@@ -643,16 +675,19 @@ handle_event:
         ret
 
         CSTR
-s_title:                .asciz "sue"
-s_view_cls:             .asciz "SueView"
-s_delegate_cls:         .asciz "SueDelegate"
+m_nokey:
+        .asciz "maos: this machine has no key, so it is nobody's yet.\nRegister at the backend and put what it gives you in MAOS_KEY.\n"
+
+s_title:                .asciz "maos"
+s_view_cls:             .asciz "MaosView"
+s_delegate_cls:         .asciz "MaosDelegate"
 t_drawRect:             .asciz "v@:{CGRect={CGPoint=dd}{CGSize=dd}}"
 t_void_id:              .asciz "v@:@"
 t_bool_id:              .asciz "c@:@"
 t_bool:                 .asciz "c@:"
 t_void:                 .asciz "v@:"
-s_sueFinish:        .asciz "sueFinish"
-s_sueBlink:         .asciz "sueBlink:"
+s_maosFinish:        .asciz "maosFinish"
+s_maosBlink:         .asciz "maosBlink:"
 s_NSTimer:              .asciz "NSTimer"
 s_scheduledTimer:       .asciz "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"
 s_performOnMain:        .asciz "performSelectorOnMainThread:withObject:waitUntilDone:"

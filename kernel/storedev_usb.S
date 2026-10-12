@@ -4,7 +4,7 @@
  *
  * store.S holds the document logic - the header, the magic, the autosave
  * delay - and nothing about where the bytes go. This is where they go when
- * sue is what booted: the USB disk, addressed as sectors, which is all a
+ * maos is what booted: the USB disk, addressed as sectors, which is all a
  * disk is once there is no filesystem in the way.
  *
  * The point of the split is not tidiness. The app and the boot have to hold

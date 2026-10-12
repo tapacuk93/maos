@@ -372,7 +372,7 @@ platform_reboot:
         LEA     x0, s_psci
         bl      reboot_method
 1:      mov     w19, w0
-#ifdef SUE_REBOOT_TEST
+#ifdef MAOS_REBOOT_TEST
 /*
  * Pretend nobody offered.
  *
@@ -402,7 +402,7 @@ platform_reboot:
         cbnz    w0, 3f                  /* armed: do not also fire an hvc into
                                            a machine that is already going down */
 4:
-#ifdef SUE_REBOOT_TEST
+#ifdef MAOS_REBOOT_TEST
 /*
  * The test build says it got here instead of getting here.
  *
@@ -460,6 +460,26 @@ reboot_method:
  * ring the editor will read when it is free again, which is all that is needed
  * for typing during a request to be typing that happened.
  */
+/*
+ * And then whoever asked to be told about it.
+ *
+ * Moving keys off the device stops them being lost, which is not the same as
+ * the machine still working. For the thirty or forty seconds an answer takes,
+ * the caret did not move, nothing appeared, and the screen held whatever it
+ * held: the keys were safe and the editor was indistinguishable from one that
+ * had crashed. What was missing is that nothing above this line knows a wait
+ * is happening, and nothing below it knows what a screen is.
+ *
+ * So the waiting is announced rather than acted on. This file keeps its rule -
+ * it names no editor and draws nothing - and the editor decides what a machine
+ * that is waiting should still do, which turns out to be most of what it does.
+ */
+        .globl  platform_on_idle
+platform_on_idle:
+        LEA     x9, idle_hook
+        str     x0, [x9]
+        ret
+
         .globl  platform_idle
 platform_idle:
         stp     x29, x30, [sp, #-16]!
@@ -468,19 +488,23 @@ platform_idle:
         ldr     w9, [x9]
         cbz     w9, 1f
         bl      kbd_pump
-1:      ldp     x29, x30, [sp], #16
+1:      LEA     x9, idle_hook
+        ldr     x9, [x9]
+        cbz     x9, 2f
+        blr     x9
+2:      ldp     x29, x30, [sp], #16
         ret
 
         .section .rodata
-#ifdef SUE_REBOOT_TEST
-m_psci_reached: .asciz "sue: reached the PSCI call\n"
+#ifdef MAOS_REBOOT_TEST
+m_psci_reached: .asciz "maos: reached the PSCI call\n"
 #endif
 s_psci_02: .asciz "arm,psci-0.2"
 s_psci_10: .asciz "arm,psci-1.0"
 s_psci:    .asciz "arm,psci"
 s_method:  .asciz "method"
-m_kbd:    .asciz "sue: keyboard found\n"
-m_nokbd:  .asciz "sue: no keyboard device\n"
+m_kbd:    .asciz "maos: keyboard found\n"
+m_nokbd:  .asciz "maos: no keyboard device\n"
 
         .section .bss
         .p2align 3
@@ -491,6 +515,8 @@ ba_stride: .space 8
 ba_depth:  .space 8
         .p2align 2
 kbd_present:    .space 4
+        .p2align 3
+idle_hook:      .space 8
         .p2align 4
 fb_store:
         .space  (FB_W * FB_H * 4)       /* what the display scans out */

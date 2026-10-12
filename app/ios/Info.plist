@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>sue</string>
+	<string>maos</string>
 	<key>CFBundleDisplayName</key>
-	<string>Software User Environment</string>
+	<string>Mutable AI Operating System</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.oeaio.sue</string>
+	<string>com.oeaio.maos</string>
 	<key>CFBundleExecutable</key>
-	<string>sue</string>
+	<string>maos</string>
 	<key>CFBundleVersion</key>
 	<string>0.1</string>
 	<key>CFBundleShortVersionString</key>

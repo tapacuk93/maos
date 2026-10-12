@@ -4,8 +4,8 @@
  * macOS, a byte off the UART on bare metal) but agree on what it means once
  * translated into these codes.
  */
-#ifndef SUE_EDITOR_INC
-#define SUE_EDITOR_INC
+#ifndef MAOS_EDITOR_INC
+#define MAOS_EDITOR_INC
 
 /* Keys.  Printable characters are themselves; these fill in the rest. */
 #define K_BS            0x08

@@ -117,6 +117,9 @@ ed_insert:
         add     w10, w10, #1
         str     w9, [x0, #SCR_LEN_OFF]
         str     w10, [x0, #SCR_CUR_OFF]
+        sub     w0, w10, #1             /* where it went, for the journal */
+        mov     w1, w19
+        bl      ed_journal_ins
 1:      ldr     x19, [sp, #16]
         ldp     x29, x30, [sp], #32
         ret
@@ -142,7 +145,342 @@ ed_backspace:
         sub     w10, w10, #1
         str     w9, [x0, #SCR_LEN_OFF]
         str     w10, [x0, #SCR_CUR_OFF]
+        mov     w0, w10
+        bl      ed_journal_del
 1:      ldp     x29, x30, [sp], #16
+        ret
+
+/*
+ * editor_whoami - x0 = the name the backend authenticated, or 0 for nobody.
+ *
+ * Set once, when the far side answers the session call, and drawn in the bar
+ * from then on. The editor does not invent it and has no default for it: a
+ * name a device made up says nothing, and the whole value of showing one is
+ * that it came from the machine holding the key.
+ */
+#define WHO_MAX         32
+
+        .globl  SYM(editor_whoami)
+SYM(editor_whoami):
+        LEA     x9, ed_whoami
+        cbz     x0, 2f
+        mov     w10, #0
+1:      cmp     w10, #(WHO_MAX - 1)
+        b.hs    2f
+        ldrb    w11, [x0, w10, uxtw]
+        cbz     w11, 2f
+        strb    w11, [x9, w10, uxtw]
+        add     w10, w10, #1
+        b       1b
+2:      mov     w10, w10
+        strb    wzr, [x9, w10, uxtw]
+        ret
+
+/* editor_known - w0 = 1 once somebody has been named. */
+        .globl  SYM(editor_known)
+SYM(editor_known):
+        LEA     x9, ed_whoami
+        ldrb    w0, [x9]
+        cmp     w0, #0
+        cset    w0, ne
+        ret
+
+/* ------------------------------------------------------------------ journal
+
+ * What the person has been doing, which is not what the screen says.
+ *
+ * The backend is handed the screen on every request and that is a photograph:
+ * it shows "x = 1" and cannot show that the line was typed just now, or typed
+ * and deleted twice, or that the number was 2 a moment ago. The difference
+ * matters to the answer. "make it faster" about a function somebody has been
+ * editing for ten minutes is a different request from the same words about a
+ * function they just pasted in.
+ *
+ * So the core records, and goes on doing no I/O: this is a ring in memory that
+ * the front end drains into whatever request it is already making. The editor
+ * still does not know what a network is.
+ *
+ * <h2>Runs, not keystrokes</h2>
+ *
+ * One entry per key would fill sixteen slots with the word "hello" and tell
+ * the model nothing it could not see. Consecutive inserts that advance by one
+ * are the same act of typing and become one entry; consecutive backspaces are
+ * one deletion. What comes out is "typed this here, took that back" - which is
+ * what a person watching over a shoulder would have reported.
+ *
+ * <h2>Small on purpose</h2>
+ *
+ * Sixteen entries, thirty-two bytes of text each. When it fills, the oldest
+ * goes. This is the recent past and not an undo log: nothing is reconstructed
+ * from it, it is read once by a model as context and then forgotten, and a
+ * complete history would cost more to send than the screen it describes.
+ */
+#define JN_MAX          16
+#define JN_TEXT         32
+#define JN_OP           0
+#define JN_AT           4
+#define JN_LEN          8
+#define JN_TXT          12
+#define JN_SZ           (JN_TXT + JN_TEXT)
+
+/* ed_journal_ins - w0 = where, w1 = the byte that went there. */
+ed_journal_ins:
+        LEA     x9, jn_count
+        ldr     w10, [x9]
+        cbz     w10, .Ljn_new_i
+
+        LEA     x9, jn_ring            /* the entry before this one */
+        sub     w11, w10, #1
+        mov     w12, #JN_SZ
+        madd    x11, x11, x12, x9
+        ldr     w12, [x11, #JN_OP]
+        cmp     w12, #'i'
+        b.ne    .Ljn_new_i
+        ldr     w13, [x11, #JN_LEN]
+        cmp     w13, #JN_TEXT
+        b.hs    .Ljn_new_i
+        ldr     w14, [x11, #JN_AT]      /* does this one carry on from it? */
+        add     w14, w14, w13
+        cmp     w14, w0
+        b.ne    .Ljn_new_i
+        add     x15, x11, #JN_TXT
+        strb    w1, [x15, w13, uxtw]
+        add     w13, w13, #1
+        str     w13, [x11, #JN_LEN]
+        ret
+
+.Ljn_new_i:
+        stp     x29, x30, [sp, #-32]!
+        mov     x29, sp
+        stp     x19, x20, [sp, #16]
+        mov     w19, w0
+        mov     w20, w1
+        bl      ed_journal_room
+        mov     w9, #'i'
+        str     w9, [x0, #JN_OP]
+        str     w19, [x0, #JN_AT]
+        mov     w9, #1
+        str     w9, [x0, #JN_LEN]
+        add     x9, x0, #JN_TXT
+        strb    w20, [x9]
+        ldp     x19, x20, [sp, #16]
+        ldp     x29, x30, [sp], #32
+        ret
+
+/*
+ * ed_journal_key - x0 = a short name for what was just pressed.
+ *
+ * Typing and deleting were being recorded and commands were not, which left
+ * the far side reading a history where text appeared and screens changed for
+ * no reason: somebody presses Cmd+T, types, presses Cmd+left, and the journal
+ * said only that two runs of text were typed, in one place, with nothing
+ * between them. The commands are most of what a person does that is not
+ * typing, and they are the half that explains the other half.
+ *
+ * Never coalesced. Two presses of the same key are two things that happened -
+ * unlike two letters, which are one word - and a page down pressed twice is a
+ * different place from a page down pressed once.
+ */
+ed_journal_key:
+        stp     x29, x30, [sp, #-32]!
+        mov     x29, sp
+        str     x19, [sp, #16]
+        mov     x19, x0
+        bl      ed_journal_room
+        mov     w9, #'k'
+        str     w9, [x0, #JN_OP]
+        str     wzr, [x0, #JN_AT]
+        add     x10, x0, #JN_TXT
+        mov     w11, #0
+1:      cmp     w11, #(JN_TEXT - 1)
+        b.hs    2f
+        ldrb    w12, [x19, w11, uxtw]
+        cbz     w12, 2f
+        strb    w12, [x10, w11, uxtw]
+        add     w11, w11, #1
+        b       1b
+2:      str     w11, [x0, #JN_LEN]
+        ldr     x19, [sp, #16]
+        ldp     x29, x30, [sp], #32
+        ret
+
+/* ed_journal_del - w0 = where the byte that went was. */
+ed_journal_del:
+        LEA     x9, jn_count
+        ldr     w10, [x9]
+        cbz     w10, .Ljn_new_d
+
+        LEA     x9, jn_ring
+        sub     w11, w10, #1
+        mov     w12, #JN_SZ
+        madd    x11, x11, x12, x9
+        ldr     w12, [x11, #JN_OP]
+        cmp     w12, #'d'
+        b.ne    .Ljn_new_d
+        ldr     w14, [x11, #JN_AT]      /* backspace walks backwards, so the
+                                           run grows downwards from where it
+                                           started rather than upwards */
+        sub     w14, w14, #1
+        cmp     w14, w0
+        b.ne    .Ljn_new_d
+        str     w0, [x11, #JN_AT]
+        ldr     w13, [x11, #JN_LEN]
+        add     w13, w13, #1
+        str     w13, [x11, #JN_LEN]
+        ret
+
+.Ljn_new_d:
+        stp     x29, x30, [sp, #-32]!
+        mov     x29, sp
+        str     x19, [sp, #16]
+        mov     w19, w0
+        bl      ed_journal_room
+        mov     w9, #'d'
+        str     w9, [x0, #JN_OP]
+        str     w19, [x0, #JN_AT]
+        mov     w9, #1
+        str     w9, [x0, #JN_LEN]
+        ldr     x19, [sp, #16]
+        ldp     x29, x30, [sp], #32
+        ret
+
+/*
+ * ed_journal_room - out x0 = an empty entry at the end, oldest dropped if full.
+ *
+ * Shifting the whole ring down costs a few hundred bytes of copying and
+ * happens once every sixteen distinct actions. A head index would avoid it and
+ * would have to be unwound by every reader; this way the entries are always in
+ * order from the start, which is the only property the reader wants.
+ */
+ed_journal_room:
+        LEA     x9, jn_count
+        ldr     w10, [x9]
+        cmp     w10, #JN_MAX
+        b.lo    2f
+        LEA     x11, jn_ring            /* drop the oldest */
+        mov     w12, #0
+        mov     w13, #(JN_SZ * (JN_MAX - 1))
+1:      cmp     w12, w13
+        b.hs    3f
+        add     x14, x11, #JN_SZ
+        ldrb    w15, [x14, w12, uxtw]
+        strb    w15, [x11, w12, uxtw]
+        add     w12, w12, #1
+        b       1b
+3:      mov     w10, #(JN_MAX - 1)
+2:      LEA     x11, jn_ring
+        mov     w12, #JN_SZ
+        madd    x0, x10, x12, x11
+        add     w10, w10, #1
+        LEA     x9, jn_count
+        str     w10, [x9]
+        ret
+
+/*
+ * editor_journal_text - x0 = where to write it, w1 = room.
+ *   out w0 = bytes written, and the ring is empty afterwards.
+ *
+ * One line per entry: "ins <offset> <what>" or "del <offset> <how many>".
+ * Three words and a number, like everything else this project sends to a
+ * reader with no parser - here the reader is a language model, which has even
+ * less use for JSON than a kernel does.
+ *
+ * Emptied by reading, because the alternative is the front end remembering
+ * what it has already sent, and the thing that goes wrong with that is sending
+ * the same five minutes of typing with every request for the rest of the
+ * session.
+ */
+        .globl  SYM(editor_journal_text)
+SYM(editor_journal_text):
+        stp     x29, x30, [sp, #-64]!
+        mov     x29, sp
+        stp     x19, x20, [sp, #16]
+        stp     x21, x22, [sp, #32]
+        stp     x23, x24, [sp, #48]
+        mov     x19, x0                 /* the cursor into the output */
+        add     x20, x0, w1, uxtw
+        sub     x20, x20, #48           /* one line's worth of headroom */
+        mov     x24, x0
+        LEA     x9, jn_count
+        ldr     w21, [x9]
+        mov     w22, #0
+
+1:      cmp     w22, w21
+        b.hs    9f
+        cmp     x19, x20
+        b.hs    9f
+        LEA     x9, jn_ring
+        mov     w10, #JN_SZ
+        madd    x23, x22, x10, x9
+
+        ldr     w9, [x23, #JN_OP]
+        cmp     w9, #'k'
+        b.ne    .Ljt_edit
+        LEA     x1, s_jn_key            /* a command, which has no offset */
+        mov     x0, x19
+        bl      SYM(str_copy)
+        mov     x19, x0
+        ldr     w10, [x23, #JN_LEN]
+        add     x11, x23, #JN_TXT
+        mov     w12, #0
+.Ljt_name:
+        cmp     w12, w10
+        b.hs    .Ljt_named
+        ldrb    w13, [x11, w12, uxtw]
+        strb    w13, [x19], #1
+        add     w12, w12, #1
+        b       .Ljt_name
+.Ljt_named:
+        mov     w9, #'\n'
+        strb    w9, [x19], #1
+        add     w22, w22, #1
+        b       1b
+.Ljt_edit:
+        cmp     w9, #'i'
+        b.ne    2f
+        LEA     x1, s_jn_ins
+        b       3f
+2:      LEA     x1, s_jn_del
+3:      mov     x0, x19
+        bl      SYM(str_copy)
+        mov     x19, x0
+
+        ldr     w1, [x23, #JN_AT]
+        mov     x0, x19
+        bl      SYM(u32_dec)
+        mov     x19, x0
+        mov     w9, #' '
+        strb    w9, [x19], #1
+
+        ldr     w9, [x23, #JN_OP]
+        cmp     w9, #'i'
+        b.ne    5f
+        ldr     w10, [x23, #JN_LEN]     /* the text, as it was typed */
+        add     x11, x23, #JN_TXT
+        mov     w12, #0
+4:      cmp     w12, w10
+        b.hs    6f
+        ldrb    w13, [x11, w12, uxtw]
+        strb    w13, [x19], #1
+        add     w12, w12, #1
+        b       4b
+5:      ldr     w1, [x23, #JN_LEN]      /* or how many went */
+        mov     x0, x19
+        bl      SYM(u32_dec)
+        mov     x19, x0
+6:      mov     w9, #'\n'
+        strb    w9, [x19], #1
+        add     w22, w22, #1
+        b       1b
+
+9:      strb    wzr, [x19]
+        LEA     x9, jn_count            /* read once, and then gone */
+        str     wzr, [x9]
+        sub     x0, x19, x24
+        ldp     x23, x24, [sp, #48]
+        ldp     x21, x22, [sp, #32]
+        ldp     x19, x20, [sp, #16]
+        ldp     x29, x30, [sp], #64
         ret
 
 /* ----------------------------------------------------------- screen switch */
@@ -274,12 +612,16 @@ SYM(editor_key):
         b.ne    1f
         mov     w0, #-1
         bl      ed_screen_step
+        LEA     x0, k_prev
+        bl      ed_journal_key
         b       .Lkey_out
 1:      mov     w9, #K_RIGHT
         cmp     w19, w9
         b.ne    1f
         mov     w0, #1
         bl      ed_screen_step
+        LEA     x0, k_next
+        bl      ed_journal_key
         b       .Lkey_out
 1:      mov     w9, #K_UP
         cmp     w19, w9
@@ -298,12 +640,16 @@ SYM(editor_key):
         cmp     w19, #'T'
         b.ne    2f
 3:      bl      ed_screen_new
+        LEA     x0, k_newscreen
+        bl      ed_journal_key
         b       .Lkey_out
 2:      cmp     w19, #'p'
         b.eq    .Laify
         cmp     w19, #'P'
         b.ne    .Lappearance
 .Laify: mov     w20, #ED_AIFY
+        LEA     x0, k_rewrite
+        bl      ed_journal_key
         b       .Lkey_out
 
 .Lappearance:                           /* Cmd +/- resizes, Cmd 0-9 recolours */
@@ -320,14 +666,20 @@ SYM(editor_key):
         b.hi    4f                      /* not a digit either: keep looking */
         LEA     x10, ed_state
         str     w9, [x10, #EDS_COLOUR]
+        LEA     x0, k_colour
+        bl      ed_journal_key
         b       .Lkey_out
 .Lbigger:
         mov     w0, #1
         bl      ed_zoom
+        LEA     x0, k_bigger
+        bl      ed_journal_key
         b       .Lkey_out
 .Lsmaller:
         mov     w0, #-1
         bl      ed_zoom
+        LEA     x0, k_smaller
+        bl      ed_journal_key
         b       .Lkey_out
 4:      cmp     w19, #K_ENTER
         b.eq    .Lsubmit
@@ -338,9 +690,13 @@ SYM(editor_key):
         cmp     w19, #0x7F              /* macOS sends DEL for Backspace */
         b.ne    .Lkey_out
 5:      bl      ed_screen_close
+        LEA     x0, k_closescreen
+        bl      ed_journal_key
         b       .Lkey_out
 .Lsubmit:
         mov     w20, #ED_SUBMIT
+        LEA     x0, k_handover
+        bl      ed_journal_key
         b       .Lkey_out
 
 .Lplain:
@@ -872,6 +1228,49 @@ SYM(editor_colour):
         b.hi    9f
         LEA     x9, ed_state
         str     w0, [x9, #EDS_COLOUR]
+9:      ret
+
+/*
+ * editor_scale - w0 = how big the text is, 1 to 8. Anything else is ignored.
+ *
+ * The companion to editor_colour, and it exists for the same reason that one
+ * does: the two things somebody can say about how the editor looks are its ink
+ * and its size, and until now only one of them could be said by anything but a
+ * key. "larger font" is a sentence about the editor, and a sentence about the
+ * editor had nowhere to land - the backend could change the colour and could
+ * not change this, which is an odd shape for a system whose whole claim is
+ * that it does what it is asked.
+ *
+ * Absolute rather than a step. ed_zoom takes +1 and -1 because a key press is
+ * a step, and a far side that has been told "larger" has to say how much
+ * larger - a stream of steps would depend on how many times a reply arrived,
+ * which is not a thing anybody means.
+ */
+        .globl  SYM(editor_scale)
+SYM(editor_scale):
+        cmp     w0, #ED_SCALE_MIN
+        b.lo    9f
+        cmp     w0, #ED_SCALE_MAX
+        b.hi    9f
+        LEA     x9, ed_state
+        str     w0, [x9, #EDS_SCALE]
+9:      ret
+
+/* editor_colour_get - w0 = the palette slot in use. */
+        .globl  SYM(editor_colour_get)
+SYM(editor_colour_get):
+        LEA     x9, ed_state
+        ldr     w0, [x9, #EDS_COLOUR]
+        ret
+
+/* editor_scale_get - w0 = what it is now, so a far side can be told. */
+        .globl  SYM(editor_scale_get)
+SYM(editor_scale_get):
+        LEA     x9, ed_state
+        ldr     w0, [x9, #EDS_SCALE]
+        cmp     w0, #ED_SCALE_MIN
+        b.hs    9f
+        mov     w0, #ED_SCALE           /* never set: it is at the default */
 9:      ret
 
 /* editor_subject - x0 = destination, w1 = capacity.  Empty when unbound. */
@@ -1568,6 +1967,38 @@ SYM(editor_render):
         str     w9, [sp, #128]
         b       .Lbar_loop
 
+/*
+ * And whoever the far side says is sitting here, at the other end of the bar.
+ *
+ * Right-aligned, so it does not move when a screen is opened and the digits
+ * grow leftwards into the space. Drawn in the caret's colour rather than the
+ * dim one the brand and the screen numbers use: it is the one thing in the bar
+ * that is about this person rather than about the program.
+ */
+        LEA     x9, ed_whoami
+        ldrb    w10, [x9]
+        cbz     w10, .Lrender_out
+        mov     w11, #0
+1:      ldrb    w12, [x9, w11, uxtw]
+        cbz     w12, 2f
+        add     w11, w11, #1
+        b       1b
+2:      ldr     w12, [sp, #132]         /* cell width */
+        mul     w11, w11, w12
+        sub     w11, w21, w11           /* from the right-hand edge */
+        ldr     w12, [sp, #132]
+        sub     w11, w11, w12           /* and one cell of margin */
+        tbnz    w11, #31, .Lrender_out  /* a bar too narrow to hold it */
+        mov     x0, x19
+        mov     w1, w20
+        mov     w2, w11
+        ldr     w3, [sp, #144]
+        lsl     w3, w3, #1
+        ldr     w4, [sp, #144]
+        LDCOL   w5, COL_CURSOR_LO, COL_CURSOR_HI
+        LEA     x6, ed_whoami
+        bl      SYM(font_draw_text)
+
 .Lrender_out:
         ldp     x27, x28, [sp, #80]
         ldp     x25, x26, [sp, #64]
@@ -1578,7 +2009,29 @@ SYM(editor_render):
         ret
 
         RODATA
-s_brand:        .asciz "SUE"
+s_brand:        .asciz "MAOS"
+
+        CSTR
+s_jn_ins:       .asciz "ins "
+s_jn_del:       .asciz "del "
+s_jn_key:       .asciz "key "
+/*
+ * What each command is called when it is written down.
+ *
+ * Named for what it does rather than for which key does it, because the key
+ * differs - Cmd on macOS, Ctrl on a serial console - and what the person meant
+ * does not. A far side reading "new-screen" knows what happened; one reading
+ * "ctrl-t" would have to know which machine this is.
+ */
+k_prev:         .asciz "previous-screen"
+k_next:         .asciz "next-screen"
+k_newscreen:    .asciz "new-screen"
+k_closescreen:  .asciz "closed-screen"
+k_rewrite:      .asciz "asked-you-to-rewrite"
+k_handover:     .asciz "handed-you-the-screen"
+k_bigger:       .asciz "made-the-text-bigger"
+k_smaller:      .asciz "made-the-text-smaller"
+k_colour:       .asciz "changed-the-colour"
 
         BSS
         .p2align 4
@@ -1586,6 +2039,11 @@ ed_screens:                             /* private: the screens themselves */
         .space  (MAX_SCREENS * SCR_STRIDE)
 ed_state:
         .space  EDS_SZ                  /* current, count, viewport, scale, colour */
+        .p2align 3
+ed_whoami:      .space  WHO_MAX
+        .p2align 3
+jn_ring:        .space  (JN_MAX * JN_SZ)
+jn_count:       .space  4
 
         RODATA
         .p2align 2

@@ -172,7 +172,7 @@ SYM(store_load):
         ldp     x29, x30, [sp], #48
         ret
 
-#ifdef SUE_DISK_TEST
+#ifdef MAOS_DISK_TEST
 /*
  * store_peek - out w0 = the first four bytes of sector zero, as they are.
  *
@@ -348,6 +348,12 @@ st_zero:
  * Eight bytes that say this disk is a document and which version of one. The
  * digit is there so that a later format can refuse an earlier one rather than
  * misread it - which is the whole reason to have a magic at all.
+ *
+ * It still spells the name the project had when the format was written, and it
+ * will go on spelling it. A magic is not a label, it is an agreement with every
+ * disk already written: change these bytes and every document anybody saved
+ * stops being a document and starts being a stranger's bytes that this refuses
+ * to read. The version digit is how this format moves; the name is not.
  */
 s_magic:  .ascii "SUEDISK1"
 

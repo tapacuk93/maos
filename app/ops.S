@@ -72,7 +72,7 @@ SYM(op_append):
  */
         .globl  SYM(op_install)
 SYM(op_install):
-#ifdef SUE_APP_STORE
+#ifdef MAOS_APP_STORE
 /*
  * Not in a build going to the App Store.
  *

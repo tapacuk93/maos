@@ -16,7 +16,7 @@
  *
  * <h2>Where the file goes</h2>
  *
- * $HOME/.sue-document. On macOS that is the home directory; on iOS it is the
+ * $HOME/.maos-document. On macOS that is the home directory; on iOS it is the
  * app's container, which is the same thing from inside the sandbox. No
  * directory is made, because a path with no directory in it cannot fail to
  * have one.
@@ -197,10 +197,10 @@ sd_close:
         ret
 
 /*
- * sd_path - out x0 = "$HOME/.sue-document", or 0 if there is no home.
+ * sd_path - out x0 = "$HOME/.maos-document", or 0 if there is no home.
  *
  * Built once and kept. No home directory means no document, rather than a file
- * called ".sue-document" in whatever directory the process happens to be
+ * called ".maos-document" in whatever directory the process happens to be
  * standing in - which would be a different document every time it was started
  * from somewhere else.
  */
@@ -251,7 +251,7 @@ SYM(store_dev_now):
 
         RODATA
 s_home: .asciz "HOME"
-s_leaf: .asciz "/.sue-document"
+s_leaf: .asciz "/.maos-document"
 
         BSS
         .p2align 3

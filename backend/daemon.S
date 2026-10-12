@@ -1,10 +1,10 @@
 #include "asm.inc"
 #include "account.inc"
 /*
- * daemon.S - the sue backend.
+ * daemon.S - the maos backend.
  *
  * This is the only process in the system that holds credentials.  It serves
- * the registration page, issues sue keys, spends aicoin on the account's
+ * the registration page, issues maos keys, spends aicoin on the account's
  * behalf, and provisions the account's instance.  Devices hold one key and
  * know none of the rest.
  *
@@ -12,9 +12,9 @@
  *   GET  /                registration page
  *   GET  /api/health
  *   POST /api/register    {wallet, aws_key, aws_secret, region} -> {key}
- *   POST /api/agent       X-Sue-Key; {mode, context, baseline} -> {text}
- *   POST /api/session     X-Sue-Key -> {instance}
- *   POST /api/teardown    X-Sue-Key -> {instance:""}
+ *   POST /api/agent       X-Maos-Key; {mode, context, baseline} -> {text}
+ *   POST /api/session     X-Maos-Key -> {instance}
+ *   POST /api/teardown    X-Maos-Key -> {instance:""}
  */
 #define SYS_EXIT        1
 #define SYS_WRITE       4
@@ -566,9 +566,9 @@ acct_new:
         ret
 
         CSTR
-s_env_port:     .asciz "SUE_PORT"
-banner:         .asciz "sue backend listening. register at / to bind a wallet and AWS access.\n"
-m_listen_failed:.asciz "sue: cannot listen\n"
+s_env_port:     .asciz "MAOS_PORT"
+banner:         .asciz "maos backend listening. register at / to bind a wallet and AWS access.\n"
+m_listen_failed:.asciz "maos: cannot listen\n"
 s_http:         .asciz "HTTP/1.1 "
 s_ct:           .asciz "\r\nContent-Type: "
 s_cl:           .asciz "\r\nConnection: close\r\nContent-Length: "
@@ -588,7 +588,7 @@ r_register:     .asciz "POST /api/register"
 r_agent:        .asciz "POST /api/agent"
 r_session:      .asciz "POST /api/session"
 r_teardown:     .asciz "POST /api/teardown"
-h_key:          .asciz "x-sue-key:"
+h_key:          .asciz "x-maos-key:"
 k_wallet:       .asciz "\"wallet\""
 k_aws_key:      .asciz "\"aws_key\""
 k_aws_secret:   .asciz "\"aws_secret\""
@@ -600,12 +600,12 @@ k_cursor:       .asciz "\"cursor\""
 s_region_default: .asciz "us-east-1"
 j_ok:           .asciz "{\"ok\":true}"
 j_notfound:     .asciz "{\"error\":\"no such endpoint\"}"
-j_unauth:       .asciz "{\"error\":\"unknown or missing sue key\"}"
+j_unauth:       .asciz "{\"error\":\"unknown or missing maos key\"}"
 j_need_both:    .asciz "{\"error\":\"an account needs both an aicoin wallet token and AWS access\"}"
 j_full:         .asciz "{\"error\":\"no free account slots\"}"
 j_upstream:     .asciz "{\"error\":\"aicoin proxy unreachable\"}"
 j_awsfail:      .asciz "{\"error\":\"ec2 call failed\"}"
-j_noami:        .asciz "{\"error\":\"set SUE_AMI to the image the instance should run\"}"
+j_noami:        .asciz "{\"error\":\"set MAOS_AMI to the image the instance should run\"}"
 j_key_head:     .asciz "{\"key\":\""
 j_text_head:    .asciz "{\"text\":\""
 j_inst_head:    .asciz "{\"instance\":\""

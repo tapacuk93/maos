@@ -4,13 +4,13 @@
  * backend_client.S - the editor's entire view of the outside world.
  *
  * The editor knows one server and one credential: its own backend, and the
- * sue key issued by sue.oeaio.com.  It does not know that Claude
+ * maos key issued by maos.oeaio.com.  It does not know that Claude
  * exists, does not know what an aicoin wallet is, and holds no AWS
  * credentials - the backend owns all of that.  What travels on this wire is
  * the screen's text out, and text back.
  *
  *   POST /api/agent
- *   X-Sue-Key: <the one key>
+ *   X-Maos-Key: <the one key>
  *   {"mode":"agent"|"aify","screen":<n>,"scroll":<r>,"rows":<n>,"cursor":<i>,
  *    "baseline":"<the text at the last sync>",
  *    "context":"<the whole current screen>"}
@@ -29,8 +29,8 @@
  * looking at, and baseline is what the text was the last time the backend saw
  * it - so the far side can reason about the edit, not just the file.
  *
- * Configuration comes from the environment: SUE_BACKEND (address:port,
- * default 127.0.0.1:8080) and SUE_KEY.  Neither is ever written to disk
+ * Configuration comes from the environment: MAOS_BACKEND (address:port,
+ * default 127.0.0.1:8080) and MAOS_KEY.  Neither is ever written to disk
  * by us, and neither appears anywhere in this repository.
  */
 #define REQ_IP          0
@@ -51,6 +51,27 @@
 #define REPLY_SZ        8192
 #define KEY_SZ          128
 
+/* What the recent past comes to, as lines: see editor_journal_text. */
+#define JN_SZ           1024
+
+/*
+ * The operation catalogue, and one operation at a time out of it.
+ *
+ * OPKEEP is how much of each hash is kept to recognise an operation this device
+ * already holds. Sixteen hex characters is sixty-four bits of a SHA-256, which
+ * is not a security property and is not being used as one - the server is
+ * trusted for the code itself, and this only has to tell two versions of the
+ * same operation apart.
+ */
+#define CAT_SZ          4096
+#define OPNAME_SZ       48
+#define OPSHA_SZ        72
+#define OPNUM_SZ        12
+#define OPPAT_SZ        128
+#define OPCODE_SZ       8192
+#define OPS_HELD        8
+#define OPKEEP          16
+
 /* What the fetch half leaves behind for the apply half. */
 #define ST_OK           0
 #define ST_NOKEY        1
@@ -66,10 +87,10 @@
  * resolve_backend - work out where to send things, and with what.
  *   out x0 = address string ("a.b.c.d:port"), x1 = key, or x1 = 0 if unset
  *
- * A device is configured with exactly one value: SUE_KEY.  The key the
+ * A device is configured with exactly one value: MAOS_KEY.  The key the
  * backend issues carries the address to reach it at, as "<secret>@<addr>", so
  * there is no second setting to get wrong and no endpoint baked into the
- * binary.  A bare key falls back to the local default, and SUE_BACKEND
+ * binary.  A bare key falls back to the local default, and MAOS_BACKEND
  * overrides everything - both of those are for development, not for users.
  */
 resolve_backend:
@@ -369,6 +390,11 @@ SYM(backend_fetch):
         str     w10, [x9]
         LEA     x9, reply_whole
         str     wzr, [x9]
+        LEA     x9, reply_clear
+        str     wzr, [x9]
+        LEA     x9, reply_scale
+        mov     w10, #-1
+        str     w10, [x9]
         LEA     x9, fetch_status
         str     wzr, [x9]               /* ST_OK */
         b       .Lsub_out
@@ -431,6 +457,13 @@ SYM(backend_fetch):
                                            nothing offline can have been told
                                            that the screen was the subject */
         str     wzr, [x9]
+        LEA     x9, reply_clear         /* and never empties it, for the same
+                                           reason - the flags are per reply and
+                                           the last reply's must not survive */
+        str     wzr, [x9]
+        LEA     x9, reply_scale
+        mov     w10, #-1
+        str     w10, [x9]
         LEA     x9, fetch_status
         str     wzr, [x9]               /* ST_OK */
         b       .Lsub_out
@@ -603,12 +636,76 @@ SYM(backend_fetch):
         mov     w2, #(BODY_SZ / 2 - 256)
         bl      SYM(json_escape)
         mov     x22, x0
+
+/*
+ * ---- and what they have been doing, which the screen cannot show ----
+ *
+ * The editor has been keeping a short list of what was typed and taken back,
+ * and this is where it goes - folded into a request that was being made
+ * anyway, rather than posted on its own. /api/journal exists and would work
+ * and would double the number of times this device talks to its backend to
+ * say things nobody is waiting for.
+ *
+ * Reading it empties it, so each action is sent once. A request that fails on
+ * the wire loses that much history, which is the right trade: the alternative
+ * is a client that remembers what it has sent, and the thing that goes wrong
+ * with that is every request carrying the whole session.
+ */
+/*
+ * ---- and how the editor currently looks ----
+ *
+ * "larger" is meaningless without it. The far side was being asked to change a
+ * size it had never been told, which is why it could only ever answer a
+ * question about appearance with a paragraph about appearance.
+ */
+        mov     x0, x22
+        LEA     x1, s_json_scale
+        bl      SYM(str_copy)
+        mov     x22, x0
+        bl      SYM(editor_scale_get)
+        mov     w1, w0
+        mov     x0, x22
+        bl      SYM(u32_dec)
+        mov     x22, x0
+
+        mov     x0, x22
+        LEA     x1, s_json_ink
+        bl      SYM(str_copy)
+        mov     x22, x0
+        bl      SYM(editor_colour_get)
+        mov     w1, w0
+        mov     x0, x22
+        bl      SYM(u32_dec)
+        mov     x22, x0
+
+        mov     x0, x22
+        LEA     x1, s_json_screens
+        bl      SYM(str_copy)
+        mov     x22, x0
+        bl      SYM(editor_screen_info) /* w1 = how many there are */
+        mov     x0, x22
+        bl      SYM(u32_dec)
+        mov     x22, x0
+
+        mov     x0, x22
+        LEA     x1, s_json_journal
+        bl      SYM(str_copy)
+        mov     x22, x0
+        LEA     x0, jnbuf
+        mov     w1, #JN_SZ
+        bl      SYM(editor_journal_text)
+        mov     x0, x22
+        LEA     x1, jnbuf
+        mov     w2, #JN_SZ
+        bl      SYM(json_escape)
+        mov     x22, x0
+
         mov     x0, x22
         LEA     x1, s_json_tail
         bl      SYM(str_copy)
         mov     x22, x0
 
-/* ---- X-Sue-Key: <key> ---------------------------------------------- */
+/* ---- X-Maos-Key: <key> ---------------------------------------------- */
         LEA     x0, hdrbuf
         LEA     x1, s_hdr_key
         bl      SYM(str_copy)
@@ -693,6 +790,28 @@ SYM(backend_fetch):
         str     w10, [x9]
 7:
 /*
+ * And what size it asked for, read the same way.
+ *
+ * One to eight, so a single digit, and anything else is nobody saying
+ * anything: the far side is told the range and a reply outside it is a reply
+ * this cannot act on, which is different from a reply that did not ask.
+ */
+        LEA     x9, reply_scale
+        mov     w10, #-1
+        str     w10, [x9]
+        LEA     x0, respbuf
+        LEA     x1, s_key_scale
+        bl      SYM(str_find)
+        cbz     x0, 6f
+        ldrb    w10, [x0]
+        sub     w10, w10, #'1'
+        cmp     w10, #7
+        b.hi    6f
+        add     w10, w10, #1
+        LEA     x9, reply_scale
+        str     w10, [x9]
+6:
+/*
  * And whether it asked the machine to restart.
  *
  * A field, not the text. Every directive is stripped before the server hands
@@ -726,6 +845,25 @@ SYM(backend_fetch):
         cset    w10, ne
         str     w10, [x9]
 /*
+ * And did it mean the screen should end up with nothing on it?
+ *
+ * "clear" is a request whose answer is an empty screen, which is a shape no
+ * other answer has: a whole-screen rewrite carrying no text is exactly what a
+ * model that failed to say anything also produces. The two are told apart by
+ * the far side saying which it meant, because nothing on this side can.
+ *
+ * The server sets "whole" for this as well, so the replace below needs no
+ * special case - the whole screen, replaced by nothing. This flag only exists
+ * to keep the emptiness from being read as a failure a few lines down.
+ */
+        LEA     x0, respbuf
+        LEA     x1, s_clear_true
+        bl      SYM(str_find)
+        LEA     x9, reply_clear
+        cmp     x0, #0
+        cset    w10, ne
+        str     w10, [x9]
+/*
  * Empty means nothing came back at all - not "no text came back". A reply that
  * changes the colour, or restarts the machine, and nothing else has no text by
  * design: the line the
@@ -743,6 +881,10 @@ SYM(backend_fetch):
         LEA     x9, reply_reboot        /* and so is "restart", which has even
                                            less to say for itself - the machine
                                            is about to be gone */
+        ldr     w10, [x9]
+        cbnz    w10, 5f
+        LEA     x9, reply_clear         /* and so is an empty screen, when an
+                                           empty screen is what was asked for */
         ldr     w10, [x9]
         cbnz    w10, 5f
         LEA     x9, fetch_status
@@ -831,6 +973,12 @@ SYM(backend_apply):
         b.eq    8f
         bl      SYM(editor_colour)
 8:
+        LEA     x9, reply_scale         /* and so is a size */
+        ldr     w0, [x9]
+        cmn     w0, #1
+        b.eq    7f
+        bl      SYM(editor_scale)
+7:
         cmp     w19, #ED_AIFY
         b.ne    4f
         LEA     x9, reply_whole         /* the whole screen, when the answer is
@@ -875,6 +1023,361 @@ SYM(backend_apply):
  * the backend decides whether that means starting one or reusing the one this
  * account already has.
  */
+
+/*
+ * ops_sync - collect the operations this device has earned, and install them.
+ *
+ * The last step of the caching ladder, and the one that was missing. A request
+ * is answered by a model; the model teaches the server a script; enough people
+ * ask for it that the server has it compiled to aarch64 and several models
+ * agree it should exist. All of that happened, and then the machine code sat on
+ * the server, because nothing on this side ever asked for it. The device kept
+ * paying a round trip for an answer that had already been reduced to four
+ * hundred bytes of code somebody had agreed to ship it.
+ *
+ * So: one GET at startup for the list, one GET per operation this device does
+ * not already hold, and each one goes into the runtime table where it is tried
+ * before the network on every subsequent request. After this, "colours blue" is
+ * answered by executing four hundred bytes, with no server, no model and no
+ * link.
+ *
+ * <h2>What is fetched is decided there, not here</h2>
+ *
+ * The list only contains operations that have been asked for often enough to be
+ * worth carrying - the server applies that, because the server is what counts
+ * the asking. This end takes the list as given. It does check one thing: that
+ * it does not already hold the same code, by the hash the catalogue carries,
+ * because the common case is a device that is up to date and the right amount
+ * of work in that case is none.
+ *
+ * <h2>Failing is silent</h2>
+ *
+ * Every failure here leaves the editor exactly as it was, which is a working
+ * editor with fewer answers of its own. No key, no server, an unparseable line,
+ * a blob that will not decode - all of them skip, none of them says anything.
+ * This is an optimisation arriving, and an optimisation that does not arrive is
+ * not an error.
+ */
+        .globl  SYM(ops_sync)
+SYM(ops_sync):
+        stp     x29, x30, [sp, #-112]!
+        mov     x29, sp
+        stp     x19, x20, [sp, #16]
+        stp     x21, x22, [sp, #32]
+        stp     x23, x24, [sp, #48]
+        stp     x25, x26, [sp, #64]
+        str     x27, [sp, #80]
+
+/*
+ * Nothing at all in a build that cannot run downloaded code.
+ *
+ * op_available answers by trying to install a few instructions, so a build with
+ * op_install closed off - the one that goes to the App Store - says no here and
+ * never asks the server for a single byte. That is better than asking and
+ * discarding: the request is what the review rules object to, not only the
+ * jump.
+ */
+        bl      SYM(op_available)
+        cbz     w0, .Los_out
+
+        bl      resolve_backend
+        mov     x19, x0
+        mov     x20, x1
+        cbz     x20, .Los_out
+
+        bl      os_headers              /* just the key: this is the list */
+        mov     x0, x19
+        bl      os_request
+        cbz     x0, .Los_out
+
+/*
+ * The catalogue, moved somewhere it will survive.
+ *
+ * It arrives in respbuf, and the very next thing this does is fetch an
+ * operation into respbuf. Walking the list from the buffer the list is being
+ * overwritten in is the kind of bug that works perfectly until the second
+ * operation.
+ */
+        mov     x1, x0
+        LEA     x0, catbuf
+        mov     w2, #(CAT_SZ - 1)
+1:      cbz     w2, 2f
+        ldrb    w9, [x1], #1
+        strb    w9, [x0], #1
+        sub     w2, w2, #1
+        cbnz    w9, 1b
+2:      strb    wzr, [x0]
+
+        LEA     x22, catbuf
+
+/* One line: name, bytes, hash, how many words it takes, then the pattern. */
+.Los_line:
+        ldrb    w9, [x22]
+        cbz     w9, .Los_out
+        cmp     w9, #'\n'
+        b.ne    1f
+        add     x22, x22, #1
+        b       .Los_line
+
+1:      mov     x0, x22
+        LEA     x1, opnamebuf
+        mov     w2, #OPNAME_SZ
+        bl      os_field
+        mov     x22, x0
+        LEA     x1, opnumbuf            /* the size, read and dropped: what the
+                                           decoder produces is the length, and
+                                           a second opinion about it would only
+                                           ever be the one that is wrong */
+        mov     w2, #OPNUM_SZ
+        bl      os_field
+        mov     x22, x0
+        LEA     x1, opshabuf
+        mov     w2, #OPSHA_SZ
+        bl      os_field
+        mov     x22, x0
+        LEA     x1, opnumbuf
+        mov     w2, #OPNUM_SZ
+        bl      os_field
+        mov     x22, x0
+        LEA     x0, opnumbuf
+        bl      SYM(str_to_u32)
+        mov     w24, w0                 /* how many words the pattern takes */
+        mov     x0, x22
+        LEA     x1, oppatbuf
+        mov     w2, #OPPAT_SZ
+        bl      os_rest
+        mov     x22, x0
+
+        LEA     x9, oppatbuf            /* a line we could not read is a line
+                                           we skip, not a reason to stop */
+        ldrb    w9, [x9]
+        cbz     w9, .Los_line
+
+        bl      os_held                 /* already here, from a previous sync */
+        cbnz    w0, .Los_line
+
+/* ---- and now the code itself -------------------------------------------- */
+        bl      os_headers
+        LEA     x1, s_hdr_op
+        bl      SYM(str_copy)
+        LEA     x1, opnamebuf
+        bl      SYM(str_copy)
+        LEA     x1, s_hdr_tail
+        bl      SYM(str_copy)
+
+        mov     x0, x19
+        bl      os_request
+        cbz     x0, .Los_line
+
+        LEA     x1, s_key_code
+        bl      SYM(str_find)
+        cbz     x0, .Los_line
+
+/*
+ * End the string where JSON ends it, before handing it to the decoder.
+ *
+ * base64_decode refuses anything that is not base64 rather than stopping at
+ * it, and it is right to: this is a decoder whose output is executed, and one
+ * that skipped rubbish would turn a truncated reply into a shorter program
+ * that runs. So the closing quote is a refusal, not a terminator, and the
+ * caller is what has to know that. Written over in place - the response buffer
+ * is this file's own, the catalogue was copied out of it already, and nothing
+ * reads past here.
+ */
+        mov     x9, x0
+        mov     w10, #0
+1:      ldrb    w11, [x9, w10, uxtw]
+        cbz     w11, 2f
+        cmp     w11, #'"'
+        b.eq    2f
+        add     w10, w10, #1
+        b       1b
+2:      strb    wzr, [x9, w10, uxtw]
+        mov     x0, x9
+        LEA     x1, codebuf
+        mov     w2, #OPCODE_SZ
+        bl      SYM(base64_decode)
+        cmp     w0, #0
+        b.le    .Los_line
+        mov     w25, w0
+
+        LEA     x0, oppatbuf
+        mov     w1, w24
+        LEA     x2, codebuf
+        mov     w3, w25
+        bl      SYM(localop_learn)
+        cbnz    w0, .Los_line           /* no room, or it would not install */
+        bl      os_keep                 /* remember the hash, not the code */
+        b       .Los_line
+
+.Los_out:
+        ldr     x27, [sp, #80]
+        ldp     x25, x26, [sp, #64]
+        ldp     x23, x24, [sp, #48]
+        ldp     x21, x22, [sp, #32]
+        ldp     x19, x20, [sp, #16]
+        ldp     x29, x30, [sp], #112
+        ret
+
+/*
+ * os_headers - the key, in hdrbuf.  out x0 = the NUL, for appending to.
+ */
+os_headers:
+        stp     x29, x30, [sp, #-16]!
+        mov     x29, sp
+        LEA     x0, hdrbuf
+        LEA     x1, s_hdr_key
+        bl      SYM(str_copy)
+        mov     x1, x20
+        bl      SYM(str_copy)
+        LEA     x1, s_hdr_tail
+        bl      SYM(str_copy)
+        ldp     x29, x30, [sp], #16
+        ret
+
+/*
+ * os_request - x0 = the address.  GET /api/ops with whatever is in hdrbuf.
+ *   out x0 = the body, or 0.
+ */
+os_request:
+        stp     x29, x30, [sp, #-32]!
+        mov     x29, sp
+        str     x19, [sp, #16]
+        mov     x19, x0
+
+        LEA     x9, req
+        mov     x0, x19
+        add     x1, x9, #REQ_IP
+        add     x2, x9, #REQ_PORT
+        bl      SYM(net_parse_addr)
+        tbnz    w0, #31, 9f
+
+        LEA     x9, req
+        LEA     x0, s_get
+        str     x0, [x9, #REQ_METHOD]
+        LEA     x0, s_path_ops
+        str     x0, [x9, #REQ_PATH]
+        str     x19, [x9, #REQ_HOST]
+        LEA     x0, hdrbuf
+        str     x0, [x9, #REQ_HDRS]
+        str     xzr, [x9, #REQ_BODY]
+        str     wzr, [x9, #REQ_BODYLEN]
+        LEA     x0, respbuf
+        str     x0, [x9, #REQ_OUT]
+        mov     w0, #RESP_SZ
+        str     w0, [x9, #REQ_OUTCAP]
+
+        LEA     x0, req
+        bl      SYM(http_request)
+        cmp     w0, #0
+        b.le    9f
+        LEA     x0, respbuf
+        bl      SYM(http_body)
+        b       8f
+9:      mov     x0, #0
+8:      ldr     x19, [sp, #16]
+        ldp     x29, x30, [sp], #32
+        ret
+
+/*
+ * os_field - x0 = cursor, x1 = where to put it, w2 = room.
+ *   out x0 = the cursor, past the field and the space after it.
+ */
+os_field:
+        mov     x3, x1
+        sub     w2, w2, #1
+1:      ldrb    w9, [x0]
+        cbz     w9, 2f
+        cmp     w9, #' '
+        b.eq    2f
+        cmp     w9, #'\n'
+        b.eq    2f
+        cbz     w2, 3f
+        strb    w9, [x3], #1
+        sub     w2, w2, #1
+3:      add     x0, x0, #1
+        b       1b
+2:      strb    wzr, [x3]
+        ldrb    w9, [x0]
+        cmp     w9, #' '
+        b.ne    4f
+        add     x0, x0, #1
+4:      ret
+
+/*
+ * os_rest - the same, to the end of the line: a pattern has spaces in it.
+ */
+os_rest:
+        mov     x3, x1
+        sub     w2, w2, #1
+1:      ldrb    w9, [x0]
+        cbz     w9, 2f
+        cmp     w9, #'\n'
+        b.eq    2f
+        cbz     w2, 3f
+        strb    w9, [x3], #1
+        sub     w2, w2, #1
+3:      add     x0, x0, #1
+        b       1b
+2:      strb    wzr, [x3]
+        ret
+
+/*
+ * os_held - is opshabuf one this device already installed?  out w0 = 1 if so.
+ *
+ * By hash rather than by name, because the interesting case is an operation
+ * that was replaced: same name, different code, and a device that skipped it
+ * because it recognised the name would keep running the old one forever.
+ */
+os_held:
+        LEA     x9, ops_held_n
+        ldr     w10, [x9]
+        mov     w11, #0
+1:      cmp     w11, w10
+        b.hs    8f
+        LEA     x9, ops_held
+        mov     w12, #OPKEEP
+        mul     w12, w11, w12
+        add     x9, x9, w12, uxtw
+        LEA     x13, opshabuf
+        mov     w14, #0
+2:      cmp     w14, #OPKEEP
+        b.hs    9f                      /* every byte the same: we have it */
+        ldrb    w15, [x9, w14, uxtw]
+        ldrb    w16, [x13, w14, uxtw]
+        cmp     w15, w16
+        b.ne    3f
+        add     w14, w14, #1
+        b       2b
+3:      add     w11, w11, #1
+        b       1b
+8:      mov     w0, #0
+        ret
+9:      mov     w0, #1
+        ret
+
+/* os_keep - remember that hash, as far as there is room for. */
+os_keep:
+        LEA     x9, ops_held_n
+        ldr     w10, [x9]
+        cmp     w10, #OPS_HELD
+        b.hs    9f
+        LEA     x9, ops_held
+        mov     w12, #OPKEEP
+        mul     w12, w10, w12
+        add     x9, x9, w12, uxtw
+        LEA     x13, opshabuf
+        mov     w14, #0
+1:      cmp     w14, #OPKEEP
+        b.hs    2f
+        ldrb    w15, [x13, w14, uxtw]
+        strb    w15, [x9, w14, uxtw]
+        add     w14, w14, #1
+        b       1b
+2:      add     w10, w10, #1
+        LEA     x9, ops_held_n
+        str     w10, [x9]
+9:      ret
 
 /*
  * behaviour_sync - fetch what everyone decided, and apply it here.
@@ -985,6 +1488,32 @@ SYM(behaviour_sync):
         ldp     x29, x30, [sp], #64
         ret
 
+/*
+ * backend_have_key - w0 = 1 if this machine has been given an identity.
+ *
+ * The one thing the editor will not start without, and it is deliberately not
+ * the network. A key means an account exists, which means a wallet and a cloud
+ * that were checked when it was issued - so a machine holding one is a machine
+ * that can do everything this program is for, as soon as it can reach
+ * anything.
+ *
+ * A machine that cannot reach anything right now still starts. It has its
+ * document, it has the operations compiled into it, and it has the ones it
+ * installed when it last had a link; what it does not have is the far side,
+ * and the two keys that need one say so when they are pressed. Refusing to
+ * open an editor because a network is down would be refusing to do the part
+ * that never needed the network.
+ */
+        .globl  SYM(backend_have_key)
+SYM(backend_have_key):
+        stp     x29, x30, [sp, #-16]!
+        mov     x29, sp
+        bl      resolve_backend
+        cmp     x1, #0
+        cset    w0, ne
+        ldp     x29, x30, [sp], #16
+        ret
+
         .globl  SYM(backend_session)
 SYM(backend_session):
         stp     x29, x30, [sp, #-64]!
@@ -995,14 +1524,14 @@ SYM(backend_session):
         bl      resolve_backend         /* the key says where to go */
         mov     x19, x0
         mov     x20, x1
-        cbz     x20, .Lses_out          /* no key: the editor still opens */
+        cbz     x20, .Lses_none         /* no key: there is nobody to be */
 
         LEA     x21, req
         mov     x0, x19
         add     x1, x21, #REQ_IP
         add     x2, x21, #REQ_PORT
         bl      SYM(net_parse_addr)
-        tbnz    w0, #31, .Lses_out
+        tbnz    w0, #31, .Lses_none
 
         LEA     x0, hdrbuf
         LEA     x1, s_hdr_key
@@ -1012,6 +1541,7 @@ SYM(backend_session):
         LEA     x1, s_hdr_tail
         bl      SYM(str_copy)
 
+        LEA     x21, req
         LEA     x0, s_post
         str     x0, [x21, #REQ_METHOD]
         LEA     x0, s_path_session
@@ -1032,9 +1562,18 @@ SYM(backend_session):
         cmp     w0, #0
         b.le    .Lses_none
 
+/*
+ * Who the far side says this is.
+ *
+ * The instance is not read here any more and nothing is written into the
+ * document. A session that pasted "INSTANCE: i-0abc" into somebody's screen at
+ * startup was putting the editor's own plumbing into the file they were about
+ * to work on - and now that the name goes in the bar, there is a place for
+ * this that is not the text.
+ */
         LEA     x0, respbuf
         bl      SYM(http_body)
-        LEA     x1, s_key_instance
+        LEA     x1, s_key_name
         bl      SYM(json_find)
         cbz     x0, .Lses_none
         mov     x1, x0
@@ -1044,16 +1583,14 @@ SYM(backend_session):
         LEA     x9, replybuf
         ldrb    w10, [x9]
         cbz     w10, .Lses_none
-        LEA     x0, m_instance
-        bl      SYM(editor_insert_str)
         LEA     x0, replybuf
-        bl      SYM(editor_insert_str)
-        LEA     x0, s_nl
-        bl      SYM(editor_insert_str)
+        bl      SYM(editor_whoami)
+        mov     w0, #1
         b       .Lses_out
 .Lses_none:
-        LEA     x0, m_noinstance
-        bl      SYM(editor_insert_str)
+        mov     x0, #0
+        bl      SYM(editor_whoami)      /* nobody, and say so by saying nothing */
+        mov     w0, #0
 .Lses_out:
         ldp     x21, x22, [sp, #32]
         ldp     x19, x20, [sp, #16]
@@ -1062,27 +1599,30 @@ SYM(backend_session):
 
         CSTR
 s_path_session:     .asciz "/api/session"
-s_key_instance:     .asciz "\"instance\""
+s_key_name:         .asciz "\"name\""
 s_empty_body:       .asciz ""
-m_instance:         .asciz "INSTANCE: "
-m_noinstance:       .asciz "NO INSTANCE. THE EDITOR WORKS; CMD+ENTER NEEDS THE BACKEND.\n"
-s_env_backend:      .asciz "SUE_BACKEND"
-s_env_key:          .asciz "SUE_KEY"
+s_env_backend:      .asciz "MAOS_BACKEND"
+s_env_key:          .asciz "MAOS_KEY"
 s_env_key_was:      .asciz "ARMEDIT_KEY"
 s_default_backend:  .asciz "127.0.0.1:8080"
 s_post:             .asciz "POST"
 s_path_agent:       .asciz "/api/agent"
 s_get:              .asciz "GET"
 s_path_behav:       .asciz "/api/behaviours"
+s_path_ops:         .asciz "/api/ops"
+s_hdr_op:           .asciz "X-Maos-Op: "
+s_key_code:         .asciz "\"code\":\""
 s_rule_dragmove:    .asciz " drag move"
 s_whole_true:       .asciz "\"whole\":true"
+s_clear_true:       .asciz "\"clear\":true"
 s_key_colour:       .asciz "\"colour\":"
+s_key_scale:        .asciz "\"scale\":"
 s_key_restart:      .asciz "\"restart\":true"
 s_nothing:          .asciz ""
 s_json_url:         .asciz "{\"url\":\""
 s_path_fetch:       .asciz "/api/fetch"
 s_open:             .asciz "open "
-s_hdr_key:          .asciz "Content-Type: application/json\r\nX-Sue-Key: "
+s_hdr_key:          .asciz "Content-Type: application/json\r\nX-Maos-Key: "
 s_hdr_tail:         .asciz "\r\n"
 s_json_mode:        .asciz "{\"mode\":\""
 s_mode_agent:       .asciz "agent"
@@ -1098,6 +1638,10 @@ s_json_rows:        .asciz ",\"rows\":"
 s_json_cursor:      .asciz ",\"cursor\":"
 s_json_base:        .asciz ",\"baseline\":\""
 s_json_ctx:         .asciz "\",\"context\":\""
+s_json_scale:       .asciz "\",\"scale\":"
+s_json_ink:         .asciz ",\"ink\":"
+s_json_screens:     .asciz ",\"screens\":"
+s_json_journal:     .asciz ",\"journal\":\""
 s_json_tail:        .asciz "\"}"
 s_key_text:         .asciz "\"text\""
 s_key_error:        .asciz "\"error\""
@@ -1109,7 +1653,7 @@ m_reply_open:       .asciz "\n--- REPLY ---\n"
  * and there is no backend configured to ask about the rest.
  */
 m_nokey:            .asciz "\nNOTHING HERE ANSWERS THAT, AND THERE IS NO BACKEND TO ASK.\nBUILT IN: colours <name>\n"
-m_badaddr:          .asciz "\nSUE_BACKEND MUST LOOK LIKE 127.0.0.1:8080\n"
+m_badaddr:          .asciz "\nMAOS_BACKEND MUST LOOK LIKE 127.0.0.1:8080\n"
 m_unreachable:      .asciz "\nBACKEND UNREACHABLE.\n"
 m_badreply:         .asciz "\nBACKEND REPLY HAD NO TEXT FIELD.\n"
 m_empty:            .asciz "\nEMPTY REPLY. NOTHING CHANGED.\n"
@@ -1130,10 +1674,21 @@ fetch_status: .space 8
 subjtext:   .space 64
 targetbuf:  .space 32
 reply_whole: .space 8
+reply_clear: .space 8
 reply_colour: .space 8
+reply_scale: .space 8
 reply_reboot: .space 8
 pending_reboot: .space 8
 bodybuf:    .space BODY_SZ
+jnbuf:      .space JN_SZ
+catbuf:     .space CAT_SZ
+opnamebuf:  .space OPNAME_SZ
+opshabuf:   .space OPSHA_SZ
+opnumbuf:   .space OPNUM_SZ
+oppatbuf:   .space OPPAT_SZ
+codebuf:    .space OPCODE_SZ
+ops_held:   .space (OPS_HELD * OPKEEP)
+ops_held_n: .space 4
 hdrbuf:     .space HDRS_SZ
 respbuf:    .space RESP_SZ
 replybuf:   .space REPLY_SZ

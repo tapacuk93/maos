@@ -27,7 +27,7 @@ kmain:
         LEA     x9, dtb_arg
         str     x0, [x9]
 
-#ifdef SUE_PROBE_CONSOLE
+#ifdef MAOS_PROBE_CONSOLE
 /*
  * Did a console come up and answer a write?
  *
@@ -45,7 +45,7 @@ kmain:
         b       1b
 #endif
 
-#ifdef SUE_PROBE_COMPAT
+#ifdef MAOS_PROBE_COMPAT
 /*
  * One bit of output from a machine that has no console.
  *
@@ -80,13 +80,13 @@ kmain:
         ldr     x0, [x9]
         bl      SYM(dtb_init)
 
-#ifdef SUE_PROBE_DATA
+#ifdef MAOS_PROBE_DATA
         movz    w0, #0x1044             /* entropy: did it write real bytes? */
         bl      SYM(vpci_selftest)
         cbz     w0, 1f
         bl      SYM(vpci_stbyte)
         cbz     w0, 1f                  /* still zero: nothing was transferred */
-#elif defined(SUE_PROBE_RXDATA)
+#elif defined(MAOS_PROBE_RXDATA)
         mov     w0, #0                  /* console zero */
         mov     w1, #0                  /* its receive queue */
         mov     w2, #1                  /* device-writable */
@@ -95,7 +95,7 @@ kmain:
         bl      vcon_rxbyte
         cmp     w0, #'h'                /* the host feeds "hello from the host" */
         b.ne    1f
-#elif defined(SUE_PROBE_BLIND)
+#elif defined(MAOS_PROBE_BLIND)
 /*
  * Transmit and do not wait.
  *
@@ -109,23 +109,23 @@ kmain:
         wfe
 1:      wfe
         b       1b
-#elif defined(SUE_PROBE_NOFF2)
+#elif defined(MAOS_PROBE_NOFF2)
         movz    w0, #0x1043
         mov     w1, #0
         bl      SYM(vpci_open_n)
         cmn     w0, #1
         b.eq    1f
-        mov     w0, #SUE_PROBE_QN
+        mov     w0, #MAOS_PROBE_QN
         bl      SYM(vpci_notify_off)
-        cmp     w0, #SUE_PROBE_NOFF2
+        cmp     w0, #MAOS_PROBE_NOFF2
         b.ne    1f
-#elif defined(SUE_PROBE_QOK)
+#elif defined(MAOS_PROBE_QOK)
         movz    w0, #0x1043
         mov     w1, #0
         bl      SYM(vpci_open_n)
         cmn     w0, #1
         b.eq    1f
-        mov     w0, #SUE_PROBE_QOK
+        mov     w0, #MAOS_PROBE_QOK
         LEA     x1, dtb_arg             /* any aligned scratch will do here */
         LEA     x2, dtb_arg
         LEA     x3, dtb_arg
@@ -133,72 +133,72 @@ kmain:
         bl      SYM(vpci_queue)
         cmn     w0, #1
         b.eq    1f
-#elif defined(SUE_PROBE_QSZ)
+#elif defined(MAOS_PROBE_QSZ)
         movz    w0, #0x1043
         mov     w1, #0
         bl      SYM(vpci_open_n)
         cmn     w0, #1
         b.eq    1f
-        mov     w0, #SUE_PROBE_QN
+        mov     w0, #MAOS_PROBE_QN
         bl      SYM(vpci_qsize_of)
-        cmp     w0, #SUE_PROBE_QSZ
+        cmp     w0, #MAOS_PROBE_QSZ
         b.ne    1f
-#elif defined(SUE_PROBE_HEARD)
+#elif defined(MAOS_PROBE_HEARD)
         bl      vcon_init
         bl      vcon_heard              /* did it answer at all? */
         cbz     w0, 1f
-#elif defined(SUE_PROBE_SAID)
+#elif defined(MAOS_PROBE_SAID)
         bl      vcon_init
         bl      vcon_said
-        cmp     w0, #SUE_PROBE_SAID
+        cmp     w0, #MAOS_PROBE_SAID
         b.ne    1f
-#elif defined(SUE_PROBE_SAIDID)
+#elif defined(MAOS_PROBE_SAIDID)
         bl      vcon_init
         bl      vcon_said_id
-        cmp     w0, #SUE_PROBE_SAIDID
+        cmp     w0, #MAOS_PROBE_SAIDID
         b.ne    1f
-#elif defined(SUE_PROBE_RX)
+#elif defined(MAOS_PROBE_RX)
         mov     w0, #0                  /* console zero, the one that answers */
-        mov     w1, #SUE_PROBE_Q
-        mov     w2, #SUE_PROBE_W
+        mov     w1, #MAOS_PROBE_Q
+        mov     w2, #MAOS_PROBE_W
         bl      vcon_qtest
         cbz     w0, 1f
-#elif defined(SUE_PROBE_COUNT)
+#elif defined(MAOS_PROBE_COUNT)
         movz    w0, #0x1AF4
-        movz    w1, #SUE_PROBE_DEVID
+        movz    w1, #MAOS_PROBE_DEVID
         bl      SYM(pci_count)
-        cmp     w0, #SUE_PROBE_COUNT
+        cmp     w0, #MAOS_PROBE_COUNT
         b.ne    1f
-#elif defined(SUE_PROBE_HI)
+#elif defined(MAOS_PROBE_HI)
         movz    w0, #0x1043
         bl      SYM(vpci_open)
         cmn     w0, #1
         b.eq    1f
-        mov     w0, #SUE_PROBE_HI
+        mov     w0, #MAOS_PROBE_HI
         bl      SYM(vpci_offers_hi)
         cbz     w0, 1f
-#elif defined(SUE_PROBE_OFFERS)
+#elif defined(MAOS_PROBE_OFFERS)
         movz    w0, #0x1043
         bl      SYM(vpci_open)
         cmn     w0, #1
         b.eq    1f
-        mov     w0, #SUE_PROBE_OFFERS
+        mov     w0, #MAOS_PROBE_OFFERS
         bl      SYM(vpci_offers)
         cbz     w0, 1f
-#elif defined(SUE_PROBE_TXQ)
+#elif defined(MAOS_PROBE_TXQ)
         movz    w0, #0x1043
-        mov     w1, #SUE_PROBE_TXQ
+        mov     w1, #MAOS_PROBE_TXQ
         bl      SYM(vpci_txtest)
         cbz     w0, 1f
-#elif defined(SUE_PROBE_NQ)
+#elif defined(MAOS_PROBE_NQ)
         movz    w0, #0x1043
         bl      SYM(vpci_open)
         cmn     w0, #1
         b.eq    1f
         bl      SYM(vpci_numq)
-        cmp     w0, #SUE_PROBE_NQ
+        cmp     w0, #MAOS_PROBE_NQ
         b.ne    1f
-#elif defined(SUE_PROBE_FEAT)
+#elif defined(MAOS_PROBE_FEAT)
         movz    w0, #0x1AF4
         movz    w1, #0x1043
         bl      SYM(pci_find)
@@ -212,13 +212,13 @@ kmain:
         mov     x20, x0
         str     wzr, [x20, #0x00]       /* the low half of what it offers */
         ldr     w0, [x20, #0x04]
-        tst     w0, #SUE_PROBE_FEAT
+        tst     w0, #MAOS_PROBE_FEAT
         b.eq    1f
-#elif defined(SUE_PROBE_SELFTEST)
-        movz    w0, #SUE_PROBE_SELFTEST
+#elif defined(MAOS_PROBE_SELFTEST)
+        movz    w0, #MAOS_PROBE_SELFTEST
         bl      SYM(vpci_selftest)
         cbz     w0, 1f
-#elif defined(SUE_PROBE_QDESC)
+#elif defined(MAOS_PROBE_QDESC)
         bl      vcon_init
         cmn     w0, #1
         b.eq    1f
@@ -228,39 +228,39 @@ kmain:
         bl      SYM(vpci_qdesc)         /* does it hold what we wrote? */
         cmp     x0, x19
         b.ne    1f
-#elif defined(SUE_PROBE_MULT)
+#elif defined(MAOS_PROBE_MULT)
         bl      vcon_init
         cmn     w0, #1
         b.eq    1f
         bl      SYM(vpci_mult)
-        cmp     w0, #SUE_PROBE_MULT
+        cmp     w0, #MAOS_PROBE_MULT
         b.ne    1f
-#elif defined(SUE_PROBE_NOFF)
+#elif defined(MAOS_PROBE_NOFF)
         bl      vcon_init
         cmn     w0, #1
         b.eq    1f
         mov     w0, #1
         bl      SYM(vpci_notify_off)
-        cmp     w0, #SUE_PROBE_NOFF
+        cmp     w0, #MAOS_PROBE_NOFF
         b.ne    1f
-#elif defined(SUE_PROBE_QENABLE)
+#elif defined(MAOS_PROBE_QENABLE)
         bl      vcon_init
         cmn     w0, #1
         b.eq    1f
         mov     w0, #1                  /* the transmit queue */
         bl      SYM(vpci_enabled)
         cbz     w0, 1f
-#elif defined(SUE_PROBE_NUMQ)
+#elif defined(MAOS_PROBE_NUMQ)
         bl      vcon_init
         cmn     w0, #1
         b.eq    1f
         bl      SYM(vpci_numq)
         cmp     w0, #2                  /* at least a receive and a transmit */
         b.lo    1f
-#elif defined(SUE_PROBE_UART)
+#elif defined(MAOS_PROBE_UART)
         bl      uart_where              /* did we find a serial port? */
         cbz     x0, 1f
-#elif defined(SUE_PROBE_DRIVEROK)
+#elif defined(MAOS_PROBE_DRIVEROK)
         movz    w0, #0x1043
         bl      SYM(vpci_open)
         cmn     w0, #1
@@ -269,14 +269,14 @@ kmain:
         bl      SYM(vpci_status)        /* is DRIVER_OK set? */
         tst     w0, #4
         b.eq    1f
-#elif defined(SUE_PROBE_QSIZE)
+#elif defined(MAOS_PROBE_QSIZE)
         bl      vcon_init
         cmn     w0, #1
         b.eq    1f
         bl      vcon_qsize              /* did it accept eight? */
         cmp     w0, #8
         b.ne    1f
-#elif defined(SUE_PROBE_WROTE)
+#elif defined(MAOS_PROBE_WROTE)
         bl      vcon_init
         cmn     w0, #1
         b.eq    1f
@@ -284,7 +284,7 @@ kmain:
         mov     w1, #5
         bl      vcon_write
         cbz     w0, 1f
-#elif defined(SUE_PROBE_STATUS)
+#elif defined(MAOS_PROBE_STATUS)
         movz    w0, #0x1AF4
         movz    w1, #0x1043
         bl      SYM(pci_find)
@@ -302,7 +302,7 @@ kmain:
         ldrb    w9, [x20, #0x14]        /* did the write stick? */
         tst     w9, #1
         b.eq    1f
-#elif defined(SUE_PROBE_FEATURES)
+#elif defined(MAOS_PROBE_FEATURES)
         movz    w0, #0x1AF4
         movz    w1, #0x1043
         bl      SYM(pci_find)
@@ -319,10 +319,10 @@ kmain:
         ldr     w9, [x20, #0x04]
         tst     w9, #1
         b.eq    1f
-#elif defined(SUE_PROBE_WINDOW)
+#elif defined(MAOS_PROBE_WINDOW)
         bl      SYM(pci_window)         /* does the bridge declare a window? */
         cbz     x0, 1f
-#elif defined(SUE_PROBE_ASSIGN)
+#elif defined(MAOS_PROBE_ASSIGN)
         movz    w0, #0x1AF4
         movz    w1, #0x1043
         bl      SYM(pci_find)
@@ -333,7 +333,7 @@ kmain:
         mov     w1, #0
         bl      SYM(pci_bar)            /* did BAR 0 end up with an address? */
         cbz     x0, 1f
-#elif defined(SUE_PROBE_STRUCT)
+#elif defined(MAOS_PROBE_STRUCT)
         movz    w0, #0x1AF4
         movz    w1, #0x1043
         bl      SYM(pci_find)
@@ -341,27 +341,27 @@ kmain:
         mov     x19, x0
         bl      SYM(pci_assign)
         mov     x0, x19
-        mov     w1, #SUE_PROBE_STRUCT
+        mov     w1, #MAOS_PROBE_STRUCT
         bl      SYM(vpci_structure)
         cbz     x0, 1f
-#elif defined(SUE_PROBE_BAR)
+#elif defined(MAOS_PROBE_BAR)
         movz    w0, #0x1AF4
         movz    w1, #0x1043
         bl      SYM(pci_find)
         cbz     x0, 1f
-        mov     w1, #SUE_PROBE_BAR
+        mov     w1, #MAOS_PROBE_BAR
         bl      SYM(pci_bar)
         cbz     x0, 1f
-#elif defined(SUE_PROBE_VCON)
+#elif defined(MAOS_PROBE_VCON)
         bl      vcon_init               /* did a console come up? */
         cmn     w0, #1
         b.eq    1f
-#elif defined(SUE_PROBE_VOPEN)
+#elif defined(MAOS_PROBE_VOPEN)
         movz    w0, #0x1043             /* the console, opened */
         bl      SYM(vpci_open)
         cmn     w0, #1
         b.eq    1f
-#elif defined(SUE_PROBE_CAP)
+#elif defined(MAOS_PROBE_CAP)
         movz    w0, #0x1AF4
         movz    w1, #0x1043
         bl      SYM(pci_find)
@@ -369,27 +369,27 @@ kmain:
         mov     w1, #0x09               /* any vendor capability at all */
         bl      SYM(pci_cap)
         cbz     x0, 1f
-#elif defined(SUE_PROBE_PCI)
-#ifdef SUE_PROBE_VENDOR
-        movz    w0, SUE_PROBE_VENDOR
+#elif defined(MAOS_PROBE_PCI)
+#ifdef MAOS_PROBE_VENDOR
+        movz    w0, MAOS_PROBE_VENDOR
 #else
         movz    w0, #0x1AF4             /* the virtio vendor */
 #endif
-#ifdef SUE_PROBE_DEV
-        movz    w1, SUE_PROBE_DEV
+#ifdef MAOS_PROBE_DEV
+        movz    w1, MAOS_PROBE_DEV
 #else
         movz    w1, #0xFFFF             /* any of its devices */
 #endif
         bl      SYM(pci_find)
         cbz     x0, 1f
-#elif defined(SUE_PROBE_ECAM)
+#elif defined(MAOS_PROBE_ECAM)
         bl      SYM(pci_base)
         cbz     x0, 1f
-#elif defined(SUE_PROBE_X0)
+#elif defined(MAOS_PROBE_X0)
         LEA     x9, dtb_arg             /* was x0 even a pointer? */
         ldr     x0, [x9]
         cbz     x0, 1f
-#elif defined(SUE_PROBE_TREE)
+#elif defined(MAOS_PROBE_TREE)
         bl      SYM(dtb_have)           /* was there a tree at all? */
         cbz     w0, 1f
 #else
@@ -450,7 +450,7 @@ kmain:
         LEA     x0, m_boot
         bl      platform_puts
 
-#ifdef SUE_FAULT_TEST
+#ifdef MAOS_FAULT_TEST
 /*
  * Break on purpose, so that not breaking is a thing that can be checked.
  *
@@ -465,7 +465,7 @@ kmain:
         ldr     w1, [x0]
 #endif
 
-#ifdef SUE_REBOOT_TEST
+#ifdef MAOS_REBOOT_TEST
 /*
  * Restart on purpose, before anything else can happen.
  *
@@ -491,7 +491,7 @@ kmain:
 #endif
 
 
-#ifdef SUE_DTB_DUMP
+#ifdef MAOS_DTB_DUMP
 /*
  * What the tree says about this machine, for when it is a new one.
  *
@@ -600,7 +600,7 @@ kmain:
  * to talk to arrives through fw_cfg - which is how a QEMU guest is handed
  * anything at boot:
  *
- *     -fw_cfg name=opt/sue/key,string=<key>@10.0.2.2:8090
+ *     -fw_cfg name=opt/maos/key,string=<key>@10.0.2.2:8090
  *
  * It goes into the same place env_get looks on every other target, so nothing
  * above here knows which kind of machine it is running on.
@@ -644,7 +644,23 @@ kmain:
         bl      platform_puts
 4:      LEA     x0, m_net
         bl      platform_puts
-
+        b       3f
+1:      LEA     x0, m_nonet
+        bl      platform_puts
+3:
+/*
+ * And the key, whether or not any of that worked.
+ *
+ * This used to sit inside the branch above, which read as tidy - the key is
+ * what the network is for - and was wrong in a way nothing noticed until the
+ * editor started refusing to open without one. A machine with no network
+ * device never reached the read, so it never learned its own name, and a
+ * machine that knows who it is with nowhere to say it is the ordinary case:
+ * somebody on a train, or a first boot before the wifi is set up.
+ *
+ * The key is an identity. The network is a route. Reading one inside the other
+ * made a machine's identity depend on whether a cable was plugged in.
+ */
         LEA     x0, s_keyfile
         bl      fwcfg_find_file
         tbnz    w0, #31, 2f
@@ -662,13 +678,10 @@ kmain:
         bl      SYM(env_put)
         LEA     x0, m_key
         bl      platform_puts
-        b       3f
+        b       5f
 2:      LEA     x0, m_nokey
         bl      platform_puts
-        b       3f
-1:      LEA     x0, m_nonet
-        bl      platform_puts
-3:
+5:
 /*
  * Whatever was on the disk, back on the screen.
  *
@@ -677,7 +690,7 @@ kmain:
  * machine with no disk, or a disk that is not a document, gets nothing and
  * says nothing: an empty editor is the ordinary state.
  */
-#ifdef SUE_DISK_TEST
+#ifdef MAOS_DISK_TEST
 /*
  * The disk, end to end, without anybody typing.
  *
@@ -704,6 +717,31 @@ kmain:
 2:
 #endif
 
+/*
+ * Whatever this machine has earned the right to answer for itself.
+ *
+ * Before the editor rather than after, and before anybody has typed anything:
+ * the first Cmd+P of the session is exactly the one that should already be
+ * local. It is one request and it fails silently, so a machine with no link
+ * reaches the editor at the same speed it always did.
+ */
+        bl      SYM(ops_sync)
+
+/*
+ * An identity, or no editor - the same rule the window build has.
+ *
+ * On a machine that is its own operating system there is nowhere to exit to,
+ * so this says what is wrong and stops rather than opening something that
+ * cannot do what it is for. The key arrives through fw_cfg or the boot
+ * arguments; see backend_have_key for why this is a check for a key and not
+ * for a network.
+ */
+        bl      SYM(backend_have_key)
+        cbnz    w0, 1f
+        LEA     x0, m_noidentity
+        bl      platform_puts
+        b       .Lidle
+1:
         bl      kedit_run               /* the editor is the operating system */
         b       .Lidle
 
@@ -770,7 +808,7 @@ put_dec:
         ldp     x29, x30, [sp], #32
         ret
 
-#ifdef SUE_DTB_DUMP
+#ifdef MAOS_DTB_DUMP
 /*
  * dtb_show - x0 = an address the tree gave us, x1 = its size.
  *
@@ -813,24 +851,25 @@ dtb_arg:  .space 8
 quad_text: .space 16    /* somewhere to build one number at a time */
 
         .section .rodata
-m_boot:   .asciz "sue: boot\n"
-m_dhcp:   .asciz "sue: the network gave us "
-m_nodhcp: .asciz "sue: nobody answered DHCP - using QEMU's fixed addresses\n"
+m_boot:   .asciz "maos: boot\n"
+m_dhcp:   .asciz "maos: the network gave us "
+m_nodhcp: .asciz "maos: nobody answered DHCP - using QEMU's fixed addresses\n"
+m_noidentity: .asciz "maos: no key, so this machine is nobody's yet. Give it one through fw_cfg (opt/maos/key) or the boot arguments, and it will open.\n"
 m_dot4:   .asciz "."
-#ifdef SUE_DISK_TEST
+#ifdef MAOS_DISK_TEST
 m_disktest:  .asciz "a document that should survive"
 m_diskok:    .asciz "disk: a document written and read back\n"
 m_diskbad:   .asciz "disk: the round trip failed\n"
 #endif
 m_nl3:    .asciz "\n"
-#ifdef SUE_REBOOT_TEST
-m_reboot_returned: .asciz "sue: reboot returned\n"
+#ifdef MAOS_REBOOT_TEST
+m_reboot_returned: .asciz "maos: reboot returned\n"
 #endif
-#if defined(SUE_PROBE_COMPAT) && !defined(SUE_PROBE_TREE)
-s_probe:  .asciz SUE_PROBE_COMPAT
+#if defined(MAOS_PROBE_COMPAT) && !defined(MAOS_PROBE_TREE)
+s_probe:  .asciz MAOS_PROBE_COMPAT
 #endif
-#ifdef SUE_DTB_DUMP
-m_dtb:    .asciz "sue: what the device tree says (virtio, pl011, pci, gpu):\n"
+#ifdef MAOS_DTB_DUMP
+m_dtb:    .asciz "maos: what the device tree says (virtio, pl011, pci, gpu):\n"
 m_absent: .asciz "  (absent)\n"
 m_tree:   .asciz "  a tree was accepted\n"
 m_notree: .asciz "  no device tree arrived in x0\n"
@@ -842,12 +881,12 @@ s_c_pl011:  .asciz "arm,pl011"
 s_c_pci:    .asciz "pci-host-ecam-generic"
 s_c_gpu:    .asciz "simple-framebuffer"
 #endif
-m_ready:  .asciz "sue: display up\n"
-m_net:    .asciz "sue: network device found\n"
-m_nonet:  .asciz "sue: no network device - Cmd+P has nowhere to go\n"
-m_key:    .asciz "sue: backend key accepted\n"
-m_nokey:  .asciz "sue: no key in fw_cfg - Cmd+P will do nothing\n"
-s_keyfile: .asciz "opt/sue/key"
-s_keyname: .asciz "SUE_KEY"
-m_nofb:   .asciz "sue: no framebuffer on this machine, serial only\n"
-m_keys:   .asciz "sue: type in the display window, or here if this machine has no\n  keyboard. Use Ctrl for Cmd - macOS keeps the real Command key for\n  itself before QEMU ever sees it.\n  Ctrl+T new screen   Ctrl+left/right switch   Ctrl+H close\n  Ctrl+P rewrite      Ctrl+J hand over         Ctrl+0..9 colour\n"
+m_ready:  .asciz "maos: display up\n"
+m_net:    .asciz "maos: network device found\n"
+m_nonet:  .asciz "maos: no network device - Cmd+P has nowhere to go\n"
+m_key:    .asciz "maos: backend key accepted\n"
+m_nokey:  .asciz "maos: no key in fw_cfg\n"
+s_keyfile: .asciz "opt/maos/key"
+s_keyname: .asciz "MAOS_KEY"
+m_nofb:   .asciz "maos: no framebuffer on this machine, serial only\n"
+m_keys:   .asciz "maos: type in the display window, or here if this machine has no\n  keyboard. Use Ctrl for Cmd - macOS keeps the real Command key for\n  itself before QEMU ever sees it.\n  Ctrl+T new screen   Ctrl+left/right switch   Ctrl+H close\n  Ctrl+P rewrite      Ctrl+J hand over         Ctrl+0..9 colour\n"

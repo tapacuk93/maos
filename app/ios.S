@@ -1,7 +1,7 @@
 #include "asm.inc"
 #include "editor.inc"
 /*
- * ios.S - sue on iPhone.
+ * ios.S - maos on iPhone.
  *
  * The same editor core, the same rasterizer, the same pixels.  UIKit appears
  * only to obtain a window and a touch stream; it draws no glyph and lays out
@@ -69,7 +69,7 @@ _main:
         mov     x20, x1                 /* argv */
 
         mov     x0, x2
-        bl      SYM(env_init)           /* SUE_KEY, when there is one */
+        bl      SYM(env_init)           /* MAOS_KEY, when there is one */
         bl      SYM(editor_init)
 /*
  * Whatever was last written, and nothing else.
@@ -104,7 +104,7 @@ _main:
         mov     x22, x0
 
         mov     w0, w19                 /* UIApplicationMain(argc, argv, nil,   */
-        mov     x1, x20                 /*                   SueDelegate)   */
+        mov     x1, x20                 /*                   MaosDelegate)   */
         mov     x2, #0
         mov     x3, x22
         bl      _UIApplicationMain
@@ -144,8 +144,8 @@ build_classes:
         ADDM    x20, s_touchesBegan, view_touches_began, t_void_id_id
         ADDM    x20, s_touchesMoved, view_touches_moved, t_void_id_id
         ADDM    x20, s_touchesEnded, view_touches_ended, t_void_id_id
-        ADDM    x20, s_sueFinish, view_sue_finish, t_void
-        ADDM    x20, s_sueTick, view_sue_tick, t_void_id
+        ADDM    x20, s_maosFinish, view_maos_finish, t_void
+        ADDM    x20, s_maosTick, view_maos_tick, t_void_id
         mov     x0, x20
         bl      _objc_registerClassPair
 
@@ -237,14 +237,14 @@ app_did_finish:
  */
         CLS     s_NSTimer
         mov     x22, x0
-        LEA     x0, s_sueTick
+        LEA     x0, s_maosTick
         bl      _sel_registerName
         mov     x23, x0
         LEA     x0, s_scheduledTimer
         bl      _sel_registerName
         mov     x1, x0
         mov     x2, x21                 /* target: the view */
-        mov     x3, x23                 /* selector: sueTick: */
+        mov     x3, x23                 /* selector: maosTick: */
         mov     x4, #0                  /* no userInfo */
         mov     x5, #1                  /* repeats */
         fmov    d0, #0.5
@@ -848,7 +848,7 @@ SYM(app_finish):
         LEA     x9, view_slot
         ldr     x19, [x9]
         cbz     x19, 1f
-        LEA     x0, s_sueFinish
+        LEA     x0, s_maosFinish
         bl      _sel_registerName
         mov     x20, x0
         LEA     x0, s_performOnMain
@@ -863,18 +863,18 @@ SYM(app_finish):
         ldp     x29, x30, [sp], #48
         ret
 
-/* - (void)sueTick: - the timer, which is here to write the document. */
+/* - (void)maosTick: - the timer, which is here to write the document. */
         .p2align 2
-view_sue_tick:
+view_maos_tick:
         stp     x29, x30, [sp, #-16]!
         mov     x29, sp
         bl      SYM(store_tick)
         ldp     x29, x30, [sp], #16
         ret
 
-/* - (void)sueFinish - the main-thread half, installed on the view class */
+/* - (void)maosFinish - the main-thread half, installed on the view class */
         .p2align 2
-view_sue_finish:
+view_maos_finish:
         stp     x29, x30, [sp, #-32]!
         mov     x29, sp
         str     x19, [sp, #16]
@@ -903,13 +903,13 @@ SYM(app_redraw):
         ret
 
         CSTR
-s_sueFinish:        .asciz "sueFinish"
-s_sueTick:          .asciz "sueTick:"
+s_maosFinish:        .asciz "maosFinish"
+s_maosTick:          .asciz "maosTick:"
 s_NSTimer:          .asciz "NSTimer"
 s_scheduledTimer:   .asciz "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"
 s_performOnMain:        .asciz "performSelectorOnMainThread:withObject:waitUntilDone:"
-s_delegate_cls:         .asciz "SueDelegate"
-s_view_cls:             .asciz "SueView"
+s_delegate_cls:         .asciz "MaosDelegate"
+s_view_cls:             .asciz "MaosView"
 s_NSObject:             .asciz "NSObject"
 s_NSString:             .asciz "NSString"
 s_UIView:               .asciz "UIView"
