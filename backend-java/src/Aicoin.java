@@ -11,7 +11,7 @@ import java.util.Map;
  * aicoin is a proxy in front of several providers, not a Claude-only path: the
  * request keeps the provider's own path and body shape, an X-AI header names
  * which upstream to use, and the proxy injects its own paid credential and
- * bills the wallet in X-Api-Key. So sue holds no provider API key of any
+ * bills the wallet in X-Api-Key. So maos holds no provider API key of any
  * kind - the per-account secret is the wallet token bound at registration.
  *
  * Claude is the default because it is what the editor is tuned for, but any
@@ -156,8 +156,27 @@ final class Aicoin {
      * thirteen.
      */
     String text(String wallet, String prompt, String pin) throws Exception {
+        return text(wallet, prompt, pin, false);
+    }
+
+    /**
+     * The same, asked of whoever answers quickest.
+     *
+     * For the calls that are a judgement rather than a piece of work: is this
+     * instruction the one we already have an answer for, is this request about
+     * code or about prose. Those have a right answer, the quick models find it
+     * as reliably as the slow ones, and somebody is sitting in front of a
+     * cursor while it is being found. Spending forty seconds of their time to
+     * be told what they already suspected is worse than being told less well.
+     *
+     * The proxy decides who that is, from what each provider has actually been
+     * taking - see its ProviderSpeed. This end holds no table of who is fast,
+     * for the same reason it holds no table of who is good.
+     */
+    String text(String wallet, String prompt, String pin, boolean fastest) throws Exception {
         var body = new StringBuilder("{\"prompt\":\"").append(Json.escape(prompt))
                 .append("\",\"subject\":\"code\",\"escalate\":false");
+        if (fastest) body.append(",\"fastest\":true");
         if (pin != null && !pin.isBlank()) {
             body.append(",\"provider\":\"").append(Json.escape(pin)).append('"');
         }

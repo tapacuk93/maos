@@ -44,7 +44,7 @@ final class Aws {
             #!/bin/bash
             dnf install -y docker
             systemctl enable --now docker
-            docker run -d --restart=always --name sue alpine:3 sleep infinity
+            docker run -d --restart=always --name maos alpine:3 sleep infinity
             """;
 
     private final HttpClient http = HttpClient.newBuilder()
@@ -67,7 +67,7 @@ final class Aws {
     /** Bring up this account's instance, or return the one it already has. */
     String provision(Accounts.Account a) throws Exception {
         if (!a.instance().isBlank()) return a.instance();
-        if (!configured()) throw new IllegalStateException("SUE_AMI is not set");
+        if (!configured()) throw new IllegalStateException("MAOS_AMI is not set");
         String body = "Action=RunInstances&Version=%s&MinCount=1&MaxCount=1&ImageId=%s&InstanceType=%s&UserData=%s"
                 .formatted(EC2_VERSION, enc(ami), enc(instanceType),
                         enc(Base64.getEncoder().encodeToString(USER_DATA.getBytes(StandardCharsets.UTF_8))));
@@ -311,7 +311,7 @@ final class Aws {
      * The current Amazon Linux image for this architecture, asked for rather
      * than configured.
      *
-     * SUE_AMI used to be a required environment variable, which meant a
+     * MAOS_AMI used to be a required environment variable, which meant a
      * backend nobody had configured refused every run - and refused it by
      * throwing a message that travelled into the run transcript, into the
      * follow-up prompt, and out to a model that read "no image is available",
@@ -325,7 +325,7 @@ final class Aws {
      * widening a deliberately narrow policy to save one call is the wrong way
      * round. The filter is tight enough that the reply is a handful of images.
      *
-     * SUE_AMI still wins when it is set, because somebody who pinned an
+     * MAOS_AMI still wins when it is set, because somebody who pinned an
      * image meant to.
      */
     String currentImage(Clouds.Credential cred) throws Exception {
@@ -360,7 +360,7 @@ final class Aws {
             throw new IllegalStateException("no image matched in " + region + ": " + trim(xml));
         }
         images.put(region, best);
-        System.out.printf("sue: newest image in %s is %s (%s)%n", region, best, bestDate);
+        System.out.printf("maos: newest image in %s is %s (%s)%n", region, best, bestDate);
         return best;
     }
 
@@ -395,6 +395,26 @@ final class Aws {
         var m = INSTANCE_ID.matcher(xml);
         if (!m.find()) throw new IllegalStateException("no instanceId in reply: " + trim(xml));
         return m.group(1);
+    }
+
+    /**
+     * Do these credentials actually work?
+     *
+     * Asked once, when a key is issued, and never again - because the only
+     * useful moment to find out is before anybody is told they have an
+     * account. The alternative is what this replaced: a key handed out on
+     * credentials nobody had tried, a request to run something a week later,
+     * a machine that was never provisioned, and an editor explaining to its
+     * user that authentication failed. By then the failure is four layers
+     * from its cause and reads as the model refusing to help.
+     *
+     * DescribeRegions because it is the cheapest thing the policy already
+     * allows: no resources, no charge, and a signature that either verifies
+     * or does not. What comes back is not read. The question is whether AWS
+     * was willing to answer it at all.
+     */
+    void verify(Clouds.Credential cred) throws Exception {
+        callWith(cred, "Action=DescribeRegions&Version=%s".formatted(EC2_VERSION));
     }
 
     /** Terminate one machine, from credentials rather than an account. */

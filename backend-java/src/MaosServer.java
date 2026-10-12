@@ -26,7 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.function.Function;
 
 /**
- * sue-server - the sue backend, on Netty.
+ * maos-server - the maos backend, on Netty.
  *
  * The only process in the system that holds credentials. It serves the
  * registration page, issues the one key a device carries, spends the account's
@@ -43,15 +43,15 @@ import java.util.function.Function;
  *   GET  /                 registration page
  *   GET  /api/health
  *   POST /api/register     {wallet, aws_key, aws_secret, region, password} -> {key}
- *   POST /api/agent        X-Sue-Key; {mode, context, baseline, cursor} -> {text}
- *   POST /api/session      X-Sue-Key -> {instance}
- *   POST /api/teardown     X-Sue-Key -> {instance:""}
- *   POST /api/journal      X-Sue-Key; one edit or one gesture
- *   GET/POST /api/clouds   X-Sue-Key; bind or list cloud credentials
- *   GET  /api/otp          X-Sue-Key -> pad accounting for this account
- *   POST /api/otp/reserve  X-Sue-Key -> {pad, bits, window}
+ *   POST /api/agent        X-Maos-Key; {mode, context, baseline, cursor} -> {text}
+ *   POST /api/session      X-Maos-Key -> {instance}
+ *   POST /api/teardown     X-Maos-Key -> {instance:""}
+ *   POST /api/journal      X-Maos-Key; one edit or one gesture
+ *   GET/POST /api/clouds   X-Maos-Key; bind or list cloud credentials
+ *   GET  /api/otp          X-Maos-Key -> pad accounting for this account
+ *   POST /api/otp/reserve  X-Maos-Key -> {pad, bits, window}
  */
-public final class SueServer {
+public final class MaosServer {
 
     private static final int MAX_BODY = 1 << 20;
 
@@ -66,6 +66,8 @@ public final class SueServer {
     private final ModelStats stats = new ModelStats();
     private final Cache cache = new Cache();
     private final Scripts scripts = new Scripts();
+    private final Recogniser recogniser;
+    private final Refusals refusals;
     private final Consensus consensus = new Consensus();
     private final Behaviours behaviours;
     private final Catalogue catalogue;
@@ -76,31 +78,43 @@ public final class SueServer {
     private final Distro distro;
     private final Release release = new Release();
     private final String publicAddr;
+    private final int opsMinimumUses;
     /** Promotion is slow and nobody is waiting for it. */
     private final ExecutorService promoter = Executors.newVirtualThreadPerTaskExecutor();
 
-    private SueServer() {
+    private MaosServer() {
         this.aicoin = new Aicoin(
-                env("SUE_AICOIN", "http://127.0.0.1:8081"),
-                env("SUE_PROVIDER", "anthropic"),
-                env("SUE_MODEL", ""));
+                env("MAOS_AICOIN", "http://127.0.0.1:8081"),
+                env("MAOS_PROVIDER", "anthropic"),
+                env("MAOS_MODEL", ""));
+        this.recogniser = new Recogniser(aicoin, scripts);
+        this.refusals = new Refusals(
+                java.nio.file.Path.of(env("MAOS_REFUSALS_DIR", "refusals")));
         this.aws = new Aws(
-                env("SUE_AWS_ADDR", ""),
-                env("SUE_AMI", ""),
-                env("SUE_INSTANCE_TYPE", ""));
-        var root = java.nio.file.Path.of(env("SUE_WORKSPACE", "workspaces"));
+                env("MAOS_AWS_ADDR", ""),
+                env("MAOS_AMI", ""),
+                env("MAOS_INSTANCE_TYPE", ""));
+        // What this backend can run things on when whoever registers has no
+        // cloud of their own. The standard AWS variable names are read too, so
+        // a machine that can already reach AWS from a shell needs nothing said
+        // twice. See Clouds.house for whose bill this is.
+        Clouds.house(Map.of(
+                "access_key", env("MAOS_AWS_KEY", env("AWS_ACCESS_KEY_ID", "")),
+                "secret_key", env("MAOS_AWS_SECRET", env("AWS_SECRET_ACCESS_KEY", "")),
+                "region", env("MAOS_AWS_REGION", env("AWS_REGION", "us-east-1"))));
+        var root = java.nio.file.Path.of(env("MAOS_WORKSPACE", "workspaces"));
         // Keys outlive the process now: a redeploy should not re-provision
         // every device that was working a moment ago.
         accounts.openStore(root.resolve("accounts.tsv"));
-        this.workspace = new Workspace(root, aws, env("SUE_S3_BUCKET", ""));
+        this.workspace = new Workspace(root, aws, env("MAOS_S3_BUCKET", ""));
         this.agent = new AwsAgent(aws, root);
         this.journal = new Journal(root);
         this.agents = new Agents(root);
         this.behaviours = new Behaviours(root);
-        this.catalogue = new Catalogue(env("SUE_AICOIN", "http://127.0.0.1:8081"),
+        this.catalogue = new Catalogue(env("MAOS_AICOIN", "http://127.0.0.1:8081"),
                 java.util.List.of("anthropic", "openai", "google", "mistral", "cohere"));
         this.consortium = new Consortium(aicoin, catalogue);
-        this.distro = new Distro(env("SUE_OPS_DIR", "../ops"));
+        this.distro = new Distro(env("MAOS_OPS_DIR", "../ops"));
         this.triage = new Triage(aicoin);
         /*
          * The waiting list: what the panel could not settle, kept until enough
@@ -110,15 +124,20 @@ public final class SueServer {
          * merely early.
          */
         this.waiting = new Waiting(
-                java.nio.file.Path.of(env("SUE_WAITING_DIR", "waiting")),
-                Integer.parseInt(env("SUE_WAIT_PEOPLE", "3")),
-                Long.parseLong(env("SUE_WAIT_DAYS", "30")) * 86400L);
-        this.publicAddr = env("SUE_PUBLIC_ADDR", "");
+                java.nio.file.Path.of(env("MAOS_WAITING_DIR", "waiting")),
+                Integer.parseInt(env("MAOS_WAIT_PEOPLE", "3")),
+                Long.parseLong(env("MAOS_WAIT_DAYS", "30")) * 86400L);
+        /*
+         * How often an operation has to have been wanted before devices are
+         * offered the machine code for it. See Scripts.nativeOps.
+         */
+        this.opsMinimumUses = Integer.parseInt(env("MAOS_OPS_USES", "3"));
+        this.publicAddr = env("MAOS_PUBLIC_ADDR", "");
         // Machines post their output back here, so they need an address that
         // works from outside this host.
         this.runner = new Runner(aws, root,
-                env("SUE_CALLBACK", publicAddr.isBlank()
-                        ? "http://127.0.0.1:" + env("SUE_PORT", "8080")
+                env("MAOS_CALLBACK", publicAddr.isBlank()
+                        ? "http://127.0.0.1:" + env("MAOS_PORT", "8080")
                         : "https://" + publicAddr));
     }
 
@@ -148,8 +167,8 @@ public final class SueServer {
     }
 
     public static void main(String[] args) throws Exception {
-        int port = Integer.parseInt(env("SUE_PORT", "8080"));
-        var app = new SueServer();
+        int port = Integer.parseInt(env("MAOS_PORT", "8080"));
+        var app = new MaosServer();
         app.startReaper();
         app.startRefresher();
         // Ask the proxy what it can reach rather than assuming: a hardcoded
@@ -179,7 +198,7 @@ public final class SueServer {
                     });
 
             var channel = b.bind(port).sync().channel();
-            System.out.printf("sue backend on :%d - register at / to bind a wallet and cloud access%n",
+            System.out.printf("maos backend on :%d - register at / to bind a wallet and cloud access%n",
                     port);
             channel.closeFuture().sync();
         } finally {
@@ -195,10 +214,10 @@ public final class SueServer {
      */
     private static final class Gate extends SimpleChannelInboundHandler<FullHttpRequest> {
 
-        private final SueServer app;
+        private final MaosServer app;
         private final ExecutorService jobs;
 
-        Gate(SueServer app, ExecutorService jobs) {
+        Gate(MaosServer app, ExecutorService jobs) {
             this.app = app;
             this.jobs = jobs;
         }
@@ -223,7 +242,7 @@ public final class SueServer {
                     res = app.dispatch(req);
                 } catch (Exception x) {
                     // Never let a handler's failure become a hung connection.
-                    System.out.printf("sue: %s %s failed: %s%n", req.method(), req.path(), x);
+                    System.out.printf("maos: %s %s failed: %s%n", req.method(), req.path(), x);
                     res = Res.json(500, Json.obj("error", "internal error"));
                 }
                 write(ctx, res);
@@ -320,7 +339,7 @@ public final class SueServer {
     private void promote(Consensus.Agreed settled, Router.Tier tier) {
         promoter.submit(() -> {
             try {
-                System.out.printf("sue: %d people agree on \"%s\" - asking for the operation%n",
+                System.out.printf("maos: %d people agree on \"%s\" - asking for the operation%n",
                         settled.people(), settled.instruction());
                 String wallet = accounts.anyWallet();
                 if (wallet == null || wallet.isBlank()) return;
@@ -328,11 +347,11 @@ public final class SueServer {
                         Consensus.promotionPrompt(settled) + scripts.briefing(), 4000);
                 var learned = scripts.learn(reply, tier.name(), true);
                 if (learned.isEmpty()) {
-                    System.out.printf("sue: nothing general in it, left as it was%n");
+                    System.out.printf("maos: nothing general in it, left as it was%n");
                     return;
                 }
                 for (var op : learned) {
-                    System.out.printf("sue: promoted \"%s\" -> %s%s%n",
+                    System.out.printf("maos: promoted \"%s\" -> %s%s%n",
                             op.pattern(), op.name(),
                             op.blob() != null
                                 ? " (" + op.blob().code().length + " bytes of machine code)"
@@ -340,7 +359,7 @@ public final class SueServer {
                     if (op.blob() != null) ship(wallet, op, settled.people(), settled.who());
                 }
             } catch (Exception x) {
-                System.out.printf("sue: promotion skipped: %s%n", x);
+                System.out.printf("maos: promotion skipped: %s%n", x);
             }
         });
     }
@@ -377,7 +396,7 @@ public final class SueServer {
                     Triage.about(op.name(), op.pattern(),
                             op.js() == null ? "(template only)" : op.js(), observed,
                             people, registered, waiting.threshold(), canWait));
-            System.out.printf("sue: first pass on \"%s\": %s - %s%n",
+            System.out.printf("maos: first pass on \"%s\": %s - %s%n",
                     op.name(), first.say(), first.why());
             if (first.rejected()) return;
 
@@ -388,9 +407,9 @@ public final class SueServer {
                 asked += "\nThe first pass was unsure: " + first.why() + "\n";
             }
             var verdict = consortium.decide(wallet, op.name(), asked);
-            System.out.printf("sue: consortium on \"%s\": %s - %s%n",
+            System.out.printf("maos: consortium on \"%s\": %s - %s%n",
                     op.name(), verdict.commit() ? "COMMIT" : "HOLD", verdict.why());
-            for (var c : verdict.changes()) System.out.printf("sue:   %s%n", c);
+            for (var c : verdict.changes()) System.out.printf("maos:   %s%n", c);
 
             if (!verdict.commit()) {
                 park(op, verdict, registered, canWait, who);
@@ -398,7 +417,7 @@ public final class SueServer {
             }
             waiting.drop(op.name());
             var written = distro.commit(op, verdict, observed, people);
-            System.out.printf("sue: %s is in the tree: %s%n", op.name(),
+            System.out.printf("maos: %s is in the tree: %s%n", op.name(),
                     written.stream().map(java.nio.file.Path::toString)
                             .collect(java.util.stream.Collectors.joining(", ")));
 
@@ -417,11 +436,11 @@ public final class SueServer {
              * the cycle is worth having at all. Boot code is the other case,
              * and Release.needsReboot is where that is decided.
              */
-            System.out.printf("sue: %s - %s%n", op.name(),
+            System.out.printf("maos: %s - %s%n", op.name(),
                     distro.publish(written, op, verdict));
             release.record(op.name(), written);
         } catch (Exception x) {
-            System.out.printf("sue: not shipping \"%s\": %s%n", op.name(), x);
+            System.out.printf("maos: not shipping \"%s\": %s%n", op.name(), x);
         }
     }
 
@@ -442,13 +461,13 @@ public final class SueServer {
     private void park(Scripts.Script op, Consortium.Verdict verdict,
                       int registered, boolean canWait, java.util.Set<String> who) {
         if (!verdict.divided()) {
-            System.out.printf("sue: \"%s\" was refused, not doubted - not kept%n",
+            System.out.printf("maos: \"%s\" was refused, not doubted - not kept%n",
                     op.name());
             waiting.drop(op.name());
             return;
         }
         if (!canWait) {
-            System.out.printf("sue: \"%s\" is doubted, but %d account%s cannot make "
+            System.out.printf("maos: \"%s\" is doubted, but %d account%s cannot make "
                             + "%d askers - not kept%n",
                     op.name(), registered, registered == 1 ? "" : "s", waiting.threshold());
             return;
@@ -458,12 +477,12 @@ public final class SueServer {
         var rec = waiting.get(op.name());
         int so_far = rec == null ? who.size() : rec.who().size();
         if (outcome == Waiting.Outcome.READY) {
-            System.out.printf("sue: \"%s\" was doubted but %d people had already "
+            System.out.printf("maos: \"%s\" was doubted but %d people had already "
                             + "asked - releasing it%n", op.name(), so_far);
             promoter.submit(() -> release(rec));
             return;
         }
-        System.out.printf("sue: \"%s\" is doubted and kept - %d of %d people so far%n",
+        System.out.printf("maos: \"%s\" is doubted and kept - %d of %d people so far%n",
                 op.name(), so_far, waiting.threshold());
     }
 
@@ -515,7 +534,7 @@ public final class SueServer {
         try {
             var learned = scripts.learn(rec.source(), "waiting-list", true);
             if (learned.isEmpty() || learned.get(0).blob() == null) {
-                System.out.printf("sue: \"%s\" reached %d people but no longer compiles%n",
+                System.out.printf("maos: \"%s\" reached %d people but no longer compiles%n",
                         rec.name(), rec.who().size());
                 waiting.drop(rec.name());
                 return;
@@ -530,25 +549,25 @@ public final class SueServer {
                     Consortium.aboutBlob(op.name(), op.pattern(), op.arguments(),
                             op.js(), op.blob().code(), op.blob().sha(), observed, people,
                             Consortium.settled(people, rec.why())));
-            System.out.printf("sue: consortium on \"%s\", asked again with %d people "
+            System.out.printf("maos: consortium on \"%s\", asked again with %d people "
                             + "behind it: %s - %s%n",
                     op.name(), people, verdict.commit() ? "COMMIT" : "HOLD", verdict.why());
             if (!verdict.commit()) {
-                System.out.printf("sue: \"%s\" held again with the evidence in hand "
+                System.out.printf("maos: \"%s\" held again with the evidence in hand "
                                 + "- dropped%n", op.name());
                 waiting.drop(rec.name());
                 return;
             }
             var written = distro.commit(op, verdict, observed, people);
-            System.out.printf("sue: %s comes off the waiting list: %s%n", op.name(),
+            System.out.printf("maos: %s comes off the waiting list: %s%n", op.name(),
                     written.stream().map(java.nio.file.Path::toString)
                             .collect(java.util.stream.Collectors.joining(", ")));
-            System.out.printf("sue: %s - %s%n", op.name(),
+            System.out.printf("maos: %s - %s%n", op.name(),
                     distro.publish(written, op, verdict));
             release.record(op.name(), written);
             waiting.drop(rec.name());
         } catch (Exception x) {
-            System.out.printf("sue: could not release \"%s\": %s%n", rec.name(), x);
+            System.out.printf("maos: could not release \"%s\": %s%n", rec.name(), x);
         }
     }
 
@@ -577,19 +596,19 @@ public final class SueServer {
     }
 
     private void startRefresher() {
-        long everyMinutes = Long.parseLong(env("SUE_REFRESH_MINUTES", "360"));
+        long everyMinutes = Long.parseLong(env("MAOS_REFRESH_MINUTES", "360"));
         if (everyMinutes <= 0) {
-            System.out.println("sue: script refreshing disabled");
+            System.out.println("maos: script refreshing disabled");
             return;
         }
         var timer = Executors.newSingleThreadScheduledExecutor(r -> {
-            var t = new Thread(r, "sue-refresher");
+            var t = new Thread(r, "maos-refresher");
             t.setDaemon(true);
             return t;
         });
         timer.scheduleWithFixedDelay(this::refresh, everyMinutes, everyMinutes,
                 java.util.concurrent.TimeUnit.MINUTES);
-        System.out.printf("sue: the model revisits its scripts every %d minutes%n",
+        System.out.printf("maos: the model revisits its scripts every %d minutes%n",
                 everyMinutes);
     }
 
@@ -627,33 +646,33 @@ public final class SueServer {
                     .compile("(?m)^#RETIRE\\s+([A-Za-z0-9_-]{1,40})\\s*$").matcher(reply);
             while (retire.find()) {
                 if (scripts.forget(retire.group(1))) {
-                    System.out.printf("sue: retired script \"%s\"%n", retire.group(1));
+                    System.out.printf("maos: retired script \"%s\"%n", retire.group(1));
                 }
             }
             for (var taught : scripts.learn(reply, tier.name(), true)) {
-                System.out.printf("sue: refreshed \"%s\" -> %s%n",
+                System.out.printf("maos: refreshed \"%s\" -> %s%n",
                         taught.pattern(), taught.name());
             }
         } catch (Exception x) {
-            System.out.printf("sue: refresh skipped: %s%n", x);
+            System.out.printf("maos: refresh skipped: %s%n", x);
         }
     }
 
     private void startReaper() {
-        long idleMinutes = Long.parseLong(env("SUE_IDLE_MINUTES", "30"));
-        long everySeconds = Long.parseLong(env("SUE_REAP_SECONDS", "60"));
+        long idleMinutes = Long.parseLong(env("MAOS_IDLE_MINUTES", "30"));
+        long everySeconds = Long.parseLong(env("MAOS_REAP_SECONDS", "60"));
         if (idleMinutes <= 0) {
-            System.out.println("sue: idle reaping disabled");
+            System.out.println("maos: idle reaping disabled");
             return;
         }
         var reaper = Executors.newSingleThreadScheduledExecutor(r -> {
-            var t = new Thread(r, "sue-reaper");
+            var t = new Thread(r, "maos-reaper");
             t.setDaemon(true);
             return t;
         });
         reaper.scheduleWithFixedDelay(() -> sweep(idleMinutes), everySeconds, everySeconds,
                 java.util.concurrent.TimeUnit.SECONDS);
-        System.out.printf("sue: reaping instances idle for %d minutes%n", idleMinutes);
+        System.out.printf("maos: reaping instances idle for %d minutes%n", idleMinutes);
     }
 
     private void sweep(long idleMinutes) {
@@ -665,13 +684,13 @@ public final class SueServer {
          * agreement the threshold was meant to represent.
          */
         for (var gone : waiting.sweep(System.currentTimeMillis() / 1000)) {
-            System.out.printf("sue: \"%s\" expired off the waiting list unasked%n", gone);
+            System.out.printf("maos: \"%s\" expired off the waiting list unasked%n", gone);
         }
         // Health is checked on the same schedule as the instance reaping, so
         // the model's picture of what is reachable is never older than a
         // sweep: an agent that stopped calling in is reported gone.
         for (var a : agents.stale()) {
-            System.out.printf("sue: agent %s has not called in for %ds%n",
+            System.out.printf("maos: agent %s has not called in for %ds%n",
                     a.name, a.idleMillis() / 1000);
         }
         // A run finishing is news, and a laptop-hosted backend has no way to be
@@ -679,7 +698,7 @@ public final class SueServer {
         for (var account : accounts.all()) {
             try {
                 if (runner.collect(account, aws)) {
-                    System.out.printf("sue: %s - a run finished, output collected%n",
+                    System.out.printf("maos: %s - a run finished, output collected%n",
                             account.id());
                 }
                 runner.expire(account, aws);
@@ -694,12 +713,12 @@ public final class SueServer {
             try {
                 String was = account.instance();
                 aws.deprovision(account);
-                System.out.printf("sue: %s idle %d min, terminated %s%n",
+                System.out.printf("maos: %s idle %d min, terminated %s%n",
                         account.id(), account.idleMillis() / 60_000L, was);
             } catch (Exception x) {
                 // Leave it for the next sweep rather than forgetting an
                 // instance that is still running and still costing money.
-                System.out.printf("sue: %s could not be reaped: %s%n", account.id(), x.getMessage());
+                System.out.printf("maos: %s could not be reaped: %s%n", account.id(), x.getMessage());
             }
         }
     }
@@ -707,9 +726,24 @@ public final class SueServer {
     /* ------------------------------------------------------------- routing */
 
     /**
-     * Registration. Both accesses or nothing: an account without a wallet
-     * token cannot pay for a call, and one without cloud credentials cannot be
-     * given an instance.
+     * Registration. A key means both accesses work, or there is no key.
+     *
+     * An account without a wallet token cannot pay for a call and one without
+     * cloud access cannot run anything, so a key that exists without them is a
+     * promise the editor cannot keep - and it does not fail at registration,
+     * where somebody is watching. It fails a week later, in the middle of a
+     * request to run something, as a sentence about authentication in the
+     * place the answer was supposed to be.
+     *
+     * So the credentials are used before the key is issued. Not inspected -
+     * used, against the real API, because a key that is the right shape and
+     * the wrong key looks exactly like a working one until it is signed with.
+     * If AWS will not answer for them, this says so here, to the person who
+     * just typed them, while they still have the thing they typed on screen.
+     *
+     * AWS access is optional to supply and not optional to have: an account
+     * that brings none is bound to the backend's own, so registering is a
+     * wallet token and a password. See Clouds.house.
      *
      * The key we hand back carries the address to reach us at, so a device
      * needs exactly one property and no separate endpoint setting.
@@ -723,22 +757,51 @@ public final class SueServer {
         String region = in.getOrDefault("region", "").trim();
         String password = in.getOrDefault("password", "");
 
-        if (wallet.isEmpty() || awsKey.isEmpty() || awsSecret.isEmpty()) {
+        if (wallet.isEmpty()) {
             return Res.json(400, Json.obj("error",
-                    "an account needs both an aicoin wallet token and AWS access"));
+                    "an account needs an aicoin wallet token"));
         }
-        if (region.isEmpty()) region = "us-east-1";
         if (password.isEmpty()) {
             return Res.json(400, Json.obj("error",
                     "a password is required: it seeds this account's pad"));
         }
 
-        var issued = accounts.create(wallet, awsKey, awsSecret, region, password);
+        // "unset" is not a placeholder this recognises so much as one it has
+        // been handed: scripts that register a device fill the field in
+        // because the field was required, and what they fill it in with is a
+        // word. Blank and word both mean the same thing - no credentials - and
+        // both are now allowed to.
+        if (unset(awsKey) || unset(awsSecret)) {
+            var lent = Clouds.house();
+            if (lent == null) {
+                return Res.json(400, Json.obj("error",
+                        "this backend has no cloud access of its own, so an account "
+                        + "needs its own: send aws_key and aws_secret"));
+            }
+            awsKey = lent.fields().get("access_key");
+            awsSecret = lent.fields().get("secret_key");
+            if (region.isEmpty()) region = lent.fields().getOrDefault("region", "us-east-1");
+        }
+        if (region.isEmpty()) region = "us-east-1";
+
+        var cred = new Clouds.Credential(Clouds.Provider.AWS,
+                Map.of("access_key", awsKey, "secret_key", awsSecret, "region", region));
+        try {
+            aws.verify(cred);
+        } catch (Exception x) {
+            // The reason as AWS gave it, not a summary of it. Somebody looking
+            // at "the security token included in the request is invalid" can
+            // act on it; somebody looking at "authentication failed" cannot.
+            return Res.json(400, Json.obj("error",
+                    "those credentials did not work: " + trim(x.getMessage())));
+        }
+
+        var issued = accounts.create(wallet, awsKey, awsSecret, region, password,
+                in.getOrDefault("name", ""));
 
         // AWS is bound like any other cloud, so the chooser can compare it
         // against whatever else this account adds later.
-        issued.account().clouds().bind(Clouds.Provider.AWS,
-                Map.of("access_key", awsKey, "secret_key", awsSecret, "region", region));
+        issued.account().clouds().bind(Clouds.Provider.AWS, cred.fields());
 
         String key = publicAddr.isBlank() ? issued.key() : issued.key() + "@" + publicAddr;
         return Res.json(200, Json.obj("key", key));
@@ -783,6 +846,73 @@ public final class SueServer {
     private static final java.util.regex.Pattern RESTART_DIRECTIVE =
             java.util.regex.Pattern.compile("(?mi)^#REBOOT\\s*$");
 
+    /**
+     * Did the reply mean to replace the screen rather than the line?
+     *
+     * A pattern like the others, rather than the special case it used to be.
+     * #WHOLE was read by stripping the first line off the answer the moment it
+     * arrived, which worked and cost two things. It had to be done again, by
+     * hand, on the follow-up path - and it was, only after a reply once
+     * reached somebody's screen with the marker still on it. And because the
+     * marker was gone before the answer was cached, the second person to ask
+     * the same question got the same words landing in a different place: the
+     * cache remembered the text and forgot what it was for.
+     *
+     * Read like #COLOUR and #REBOOT, it survives into the cache and out of it,
+     * and the last thing every reply passes through takes it back out.
+     */
+    private static final java.util.regex.Pattern WHOLE_DIRECTIVE =
+            java.util.regex.Pattern.compile("(?mi)^#WHOLE\\s*$");
+
+    /**
+     * Did the reply mean the screen should end up empty?
+     *
+     * "clear", "cls", "start again", "get rid of all this" are requests with
+     * an answer that is not text. #WHOLE could express it - the whole screen,
+     * replaced by nothing - but only by sending nothing, and nothing is
+     * exactly what a reply looks like when a model has failed to produce one.
+     * The editor cannot tell those apart and is right not to guess: it says
+     * the answer was empty and leaves the document alone, which is the correct
+     * response to a model that returned nothing and the wrong one to somebody
+     * who asked for an empty screen.
+     *
+     * So clearing says so. An empty reply is still an empty reply, and a
+     * screen is only emptied when a reply asked for it in as many words.
+     */
+    private static final java.util.regex.Pattern CLEAR_DIRECTIVE =
+            java.util.regex.Pattern.compile("(?mi)^#CLEAR\\s*$");
+
+    /**
+     * How big the text should be, or -1 for "they did not say".
+     *
+     * The second thing anybody says about how an editor looks, and for a long
+     * time the only one of the two that could not be said: #COLOUR existed and
+     * this did not, so "make it blue" worked and "larger font" produced a
+     * paragraph about fonts. That asymmetry was not a decision, it was the
+     * colour directive being written first and nothing following it.
+     *
+     * A number rather than "larger", for the same reason the colour is a slot
+     * rather than a name: the model knows what larger means and this only has
+     * to read a digit. It is also what makes the answer idempotent - "larger"
+     * applied twice is a question about how many times a reply arrived.
+     */
+    private static final java.util.regex.Pattern SCALE_DIRECTIVE =
+            java.util.regex.Pattern.compile("(?mi)^#SCALE\\s+([1-8])\\s*$");
+
+    static int scaleIn(String reply) {
+        if (reply == null) return -1;
+        var m = SCALE_DIRECTIVE.matcher(reply);
+        return m.find() ? m.group(1).charAt(0) - '0' : -1;
+    }
+
+    static boolean wholeIn(String reply) {
+        return reply != null && WHOLE_DIRECTIVE.matcher(reply).find();
+    }
+
+    static boolean clearIn(String reply) {
+        return reply != null && CLEAR_DIRECTIVE.matcher(reply).find();
+    }
+
     static boolean restartIn(String reply) {
         return reply != null && RESTART_DIRECTIVE.matcher(reply).find();
     }
@@ -824,6 +954,61 @@ public final class SueServer {
             When in doubt, leave it out. A reply that lands in the wrong place
             is a nuisance; one that deletes the screen is not.
 
+            TAKING SOMETHING OUT
+
+            This editor grows by itself. Somebody asks for something, you
+            answer, the answer becomes a script, the script becomes machine
+            code, and once enough people have wanted it the machine code is
+            agreed and shipped to everybody. Everything in this briefing so far
+            is about that direction.
+
+            This is the other one. "stop doing that", "I don't want that any
+            more", "put it back how it was", "undo whatever just changed" are
+            not edits to their text. They are somebody saying that a thing the
+            system learned is not for them. Answer with:
+
+                #REFUSE <name> <why, in a few words>
+
+            and it stops being used for this person. Not for anybody else, and
+            not deleted: a refusal is "not for me" and never a vote on whether
+            the thing should exist. To put one back:
+
+                #RESTORE <name>
+
+            The name is the hard part and it is yours to get right. The
+            operations this server knows are listed above with their names; if
+            what they are objecting to is one of those, name it. If it is not -
+            if it is something built into the editor itself - name the change
+            rather than guessing at an operation, and say plainly that it will
+            take a rebuild rather than pretending it is gone. Refusing the wrong
+            thing takes away something they still wanted, so when you cannot
+            tell which they mean, ask them which rather than choosing.
+
+            CLEARING IT
+
+            Some requests are answered by an empty screen. "clear", "cls",
+            "clear the screen", "start again", "wipe this", "new document" -
+            these are not questions about the text and they are not requests
+            for text. They are asking for the screen to be empty. Answer with:
+
+                #CLEAR
+
+            alone, and nothing else. Do not write "cleared", do not write "OK",
+            do not describe what you did: the empty screen is the answer, and a
+            word left on it is the one thing the person asked to be rid of.
+
+            This is a small closed set of requests and it should stay small.
+            "clear the array", "remove the comments", "delete the second
+            function" are edits, and they take #WHOLE and a rewritten screen -
+            the screen is not empty afterwards, it is different. "how do I
+            clear a terminal" is a question. The test is whether an empty
+            screen is what was asked for, not whether the word appears.
+
+            Worth scripting, for exactly the reason the set is closed: it is
+            the same three or four sentences from everybody, the answer never
+            varies, and nobody should wait on a model to be told the screen is
+            now empty.
+
             RUNNING IT
 
             Almost never. Writing the code is the answer to almost every
@@ -852,6 +1037,20 @@ public final class SueServer {
             running afterwards. That is not free, which is the other reason not
             to reach for it uninvited.
 
+            None of that paragraph is part of the answer. The person asked what
+            their program prints, and the reply is what it printed - not a
+            cloud, not an instance, not a region, not a note about
+            provisioning. They are working in a text editor; where the bytes
+            were executed is this backend's business in the way that which core
+            ran a local process is the operating system's. Write the output as
+            though the machine in front of them had produced it, because from
+            where they are sitting it did.
+
+            The same holds when it goes wrong. "could not run it" is the whole
+            of what they can act on. A failure explained in terms of
+            credentials, quotas or authentication is a description of somebody
+            else's machinery arriving in the middle of their document.
+
             "sort it manually", "do it without the library", "rewrite it as a
             loop" are not requests to run anything. They are changes to what is
             on the screen, so they take #WHOLE and a rewritten screen.
@@ -873,10 +1072,11 @@ public final class SueServer {
             and answering it by restarting the machine somebody asked it on is
             the worst available outcome.
 
-            Only the OS build can act on it. On macOS and iOS sue is a
-            program inside somebody else's operating system, and the directive
-            is recognised and ignored there - so it is never wrong to answer,
-            only sometimes ineffective.
+            Only the OS build can act on it. On macOS and iOS maos is a
+            program inside somebody else's operating system, which does not let
+            a program restart the machine - so the line is read and then
+            nothing happens, and answering it is never wrong, only sometimes
+            ineffective.
 
             HOW IT LOOKS
 
@@ -902,6 +1102,30 @@ public final class SueServer {
             what they asked for.
 
             Worth scripting: the answer depends on nothing but the colour named.
+
+            HOW BIG IT IS
+
+            "larger font", "bigger text", "too small", "make it smaller",
+            "normal size" are the same kind of request about the other thing
+            the editor can be told. The text is drawn at a whole-number scale
+            from 1 to 8, and the size it is at right now is given above under
+            THE EDITOR IS. Answer with the size you want it to end up at:
+
+                #SCALE 4       <- the size to go to, not the amount to change by
+
+            A number and not a direction, because a direction depends on how
+            many times a reply arrives and a size does not. Work it out from
+            the size it is at: one step for "larger" or "smaller", two or three
+            for "much larger", 2 for "normal", 1 for "as small as it goes", 8
+            for "as large as it goes". A request to go past either end lands on
+            the end rather than failing.
+
+            Nothing else goes in the reply. The line they typed disappears and
+            the text changes size, which is all they asked for.
+
+            Worth scripting, and worth noticing that it cannot be: the answer
+            depends on the size it is at now, so a stored answer would be right
+            once and wrong afterwards. Leave this one to be asked.
             """;
 
 
@@ -967,6 +1191,7 @@ public final class SueServer {
         String instruction = in.getOrDefault("instruction", "");
         String subject = in.getOrDefault("subject", "");
         int screen = parseInt(in.getOrDefault("screen", "1"), 1);
+        recordJournal(account, screen, in.get("journal"));
 
         // Memory to disk to cloud: handed to the writer thread, not waited on.
         workspace.save(account, screen, context);
@@ -989,7 +1214,7 @@ public final class SueServer {
 
         prompt.append(switch (mode) {
             case "swipe" -> """
-                    You are inside sue, a text editor. The user swiped across some words \
+                    You are inside maos, a text editor. The user swiped across some words \
                     and wants something done with them - they did not say what, and the gesture \
                     is the whole request. Work out from the words themselves, the surrounding \
                     screen and what they have been doing what would actually help: explain it, \
@@ -997,7 +1222,7 @@ public final class SueServer {
                     answer is that it is not clear, say so in one line rather than guessing at \
                     length.""";
             case "aify" -> """
-                    You are inside sue, a text editor. The user wrote an instruction and it \
+                    You are inside maos, a text editor. The user wrote an instruction and it \
                     is about to be REPLACED by your reply, in place, where it stands. Produce \
                     exactly what should be there instead of it and nothing else - no preamble, no \
                     explanation, no fences, no restating the instruction. If they wrote \
@@ -1005,7 +1230,7 @@ public final class SueServer {
                     shorter" over some text, reply with the shorter text. Whatever you send is \
                     what they will be looking at.""";
             default -> """
-                    You are inside sue, a text editor. The user asked about this screen. \
+                    You are inside maos, a text editor. The user asked about this screen. \
                     Answer plainly.""";
         });
         prompt.append("""
@@ -1032,6 +1257,20 @@ public final class SueServer {
             prompt.append("THIS IS WHAT YOUR REPLY WILL REPLACE:\n")
                   .append(instruction).append("\n\n");
         }
+/*
+ * What the editor looks like right now.
+ *
+ * Without this, a request about appearance has nothing to be relative to:
+ * "larger" is a comparison, and the far side was being asked to make one with
+ * only half of it. The same goes for a request to put something back - "normal
+ * size" means something different depending on where it is now.
+ */
+        prompt.append("THE EDITOR IS:\n")
+              .append("  text size ").append(parseInt(in.getOrDefault("scale", "2"), 2))
+              .append(" of 8\n")
+              .append("  on screen ").append(screen).append(" of ")
+              .append(in.getOrDefault("screens", "1")).append("\n\n");
+        prompt.append(refusals.briefing(account.id()));
         prompt.append(journal.briefing(account, screen));
         prompt.append(runner.briefing(account));
         prompt.append(agents.briefing(account)).append('\n');
@@ -1072,7 +1311,7 @@ public final class SueServer {
         if (shareable) {
             cacheKey = Cache.key(mode, instruction, context, baseline, selection, subject);
             if (unhappy && cache.forget(cacheKey)) {
-                System.out.printf("sue: asked again - forgetting the cached answer for \"%s\"%n",
+                System.out.printf("maos: asked again - forgetting the cached answer for \"%s\"%n",
                         instruction.length() > 60 ? instruction.substring(0, 60) + "..." : instruction);
             }
             var hit = cache.get(cacheKey);
@@ -1089,15 +1328,33 @@ public final class SueServer {
                         System.currentTimeMillis(), "cached", 0, instruction)));
                 return Res.json(200, Json.obj("text", withoutDirectives(hit.text()),
                         "model", hit.model(), "cached", true,
-                        "colour", colourIn(hit.text()),
+                        "whole", wholeIn(hit.text()) || clearIn(hit.text()),
+                        "clear", clearIn(hit.text()),
+                        "colour", colourIn(hit.text()), "scale", scaleIn(hit.text()),
                         "restart", restartIn(hit.text())));
             }
 
             // Nobody asked this exact thing before, but a model may have
             // recognised the kind of thing it is and left an answer for it.
             // This is the fast path: no upstream call at all.
-            var scripted = unhappy ? null : scripts.lookup(new Scripts.Ctx(
-                    mode, instruction, context, selection, subject));
+            var ctx = new Scripts.Ctx(mode, instruction, context, selection, subject);
+            var scripted = unhappy ? null : scripts.lookup(ctx);
+            if (scripted != null && refusals.refuses(account.id(), scripted.script().name())) {
+                // They took this one away. Falling through to a model gives them
+                // what they would have had before it existed, which is the only
+                // thing a refusal can honestly mean.
+                scripted = null;
+            }
+            if (scripted == null && !unhappy) {
+                // Still nothing - but "cls" and "clear the screen" are one
+                // request, and no matcher can see it. One quick call decides
+                // whether this is a phrasing of something already answered; if
+                // it is, the phrase becomes a pattern for it and the lookup
+                // below succeeds from now on without asking anybody.
+                if (recogniser.recognise(account.wallet(), instruction) != null) {
+                    scripted = scripts.lookup(ctx);
+                }
+            }
             if (scripted != null) {
                 journal.edits(account, screen, java.util.List.of(new Journal.Edit(
                         System.currentTimeMillis(), "scripted", 0, instruction)));
@@ -1107,7 +1364,9 @@ public final class SueServer {
                 return Res.json(200, Json.obj("text", withoutDirectives(scripted.text()),
                         "model", scripted.script().author(), "scripted", true,
                         "script", scripted.script().name(),
-                        "colour", colourIn(scripted.text()),
+                        "whole", wholeIn(scripted.text()) || clearIn(scripted.text()),
+                        "clear", clearIn(scripted.text()),
+                        "colour", colourIn(scripted.text()), "scale", scaleIn(scripted.text()),
                         "restart", restartIn(scripted.text())));
             }
         }
@@ -1146,6 +1405,7 @@ public final class SueServer {
             stats.reasked(account.lastModel(), category);
         }
 
+        System.out.printf("maos: prompt %d chars, screen %d%n", base.length(), context.length());
         try {
             String text = "";
             for (int hop = 0; hop <= Router.MAX_HANDOFFS; hop++) {
@@ -1163,7 +1423,7 @@ public final class SueServer {
                 if (handoff == null || hop == Router.MAX_HANDOFFS) break;
                 stats.handedAway(tier.name(), category);
                 stats.handedTo(handoff.to().name(), category);
-                System.out.printf("sue: %s handing %s -> %s (%s)%n",
+                System.out.printf("maos: %s handing %s -> %s (%s)%n",
                         account.id(), tier.name(), handoff.to().name(), handoff.reason());
                 base = base + "\n\n" + "%s looked at this and handed it to you: %s"
                         .formatted(tier.name(), handoff.reason());
@@ -1171,21 +1431,13 @@ public final class SueServer {
             }
             text = Router.withoutHandoff(text);
 
-            // Did it decide this supersedes the screen rather than the line?
-            boolean whole = false;
             text = plainText(text);
-            String lead = text.stripLeading();
-            if (lead.startsWith("#WHOLE")) {
-                whole = true;
-                int nl = lead.indexOf('\n');
-                text = nl < 0 ? "" : lead.substring(nl + 1);
-            }
 
             // Whatever it decided was worth remembering, remember - then take
             // the teaching back out, because the user asked for an answer and
             // not for a transcript of the model talking to the server.
             for (var taught : scripts.learn(text, tier.name(), shareable)) {
-                System.out.printf("sue: %s taught \"%s\" -> %s (%s)%n",
+                System.out.printf("maos: %s taught \"%s\" -> %s (%s)%n",
                         tier.name(), taught.pattern(), taught.name(),
                         taught.code() != null ? "compiled" : taught.body().length() + "-byte template");
             }
@@ -1214,6 +1466,12 @@ public final class SueServer {
                         depended on it is the failure worth mentioning, and then
                         in one line.
 
+                        Where it ran is not part of the answer. Do not name a
+                        cloud, an instance, a region or a credential; do not
+                        say that a machine was provisioned or that one could
+                        not be. The output is the answer, and if there is no
+                        output the answer is that it could not be run.
+
                         If a command did not run, you do not know what it would
                         have printed. Do not write it down. Saying "it would
                         output [ 'apple', 'banana' ]" is the one thing this
@@ -1224,17 +1482,20 @@ public final class SueServer {
                         above is real and you may use it, or there is none and
                         there is none to report.
                         """;
-                text = AwsAgent.redact(aicoin.ask(account.wallet(), tier, followUp, 16000));
                 // The follow-up replaces everything decided above, markers and
-                // all - so it gets the same treatment, or #WHOLE arrives on the
-                // user's screen as four literal characters.
-                text = plainText(text);
-                String lead2 = text.stripLeading();
-                if (lead2.startsWith("#WHOLE")) {
-                    whole = true;
-                    int nl = lead2.indexOf('\n');
-                    text = nl < 0 ? "" : lead2.substring(nl + 1);
-                }
+                // all - and carries its own, which are read off it in the same
+                // place every other reply's are.
+                text = plainText(AwsAgent.redact(
+                        aicoin.ask(account.wallet(), tier, followUp, 16000)));
+            }
+
+            // Anything they asked to be rid of, recorded before the reply is
+            // cached or shared - a refusal is about this account and must not
+            // travel with an answer to somebody else.
+            String took = refusals.act(account.id(), text, scripts);
+            if (!took.isBlank()) {
+                System.out.printf("maos: %s %s", account.id(), took);
+                text = text.isBlank() ? took.strip() : text + "\n\n" + took.strip();
             }
 
             // Did this land somebody else's answer too?  If enough different
@@ -1273,8 +1534,12 @@ public final class SueServer {
                 text = text.isBlank() ? notice : text + "\n\n" + notice;
             }
             return Res.json(200, Json.obj("text", withoutDirectives(text),
-                    "model", tier.name(), "whole", whole,
-                    "colour", colourIn(text), "restart", restartIn(text),
+                    "model", tier.name(),
+                    // Clearing is a rewrite of the whole screen whose new
+                    // contents happen to be nothing, so a client that knows
+                    // only about #WHOLE does the right thing with it.
+                    "whole", wholeIn(text) || clearIn(text), "clear", clearIn(text),
+                    "colour", colourIn(text), "scale", scaleIn(text), "restart", restartIn(text),
                     "reboot", release.rebootPending()));
         } catch (Exception x) {
             return Res.json(502, Json.obj("error", "aicoin: " + x.getMessage()));
@@ -1285,6 +1550,41 @@ public final class SueServer {
      * The editor reporting what happened: every edit including removals, and
      * every gesture. Stored per screen and fed back into the next prompt.
      */
+    /**
+     * What the editor has been doing, as it reports it.
+     *
+     * Lines of "ins <offset> <what>" and "del <offset> <how many>", which is
+     * what editor_journal_text writes. A client with no JSON encoder sends
+     * three words and a number, and this reads three words and a number; the
+     * alternative was a nested array in a protocol whose client-side parser is
+     * forty instructions of assembly.
+     *
+     * A line that does not parse is skipped rather than refused. This is
+     * context for a model, not an instruction: half a history is worth having
+     * and no history is worth having, and neither is worth failing somebody's
+     * request over.
+     */
+    private void recordJournal(Accounts.Account account, int screen, String text) {
+        if (text == null || text.isBlank()) return;
+        long now = System.currentTimeMillis();
+        var edits = new java.util.ArrayList<Journal.Edit>();
+        for (String line : text.split("\n")) {
+            var f = line.strip().split(" ", 3);
+            if (f.length < 2) continue;
+            String op = f[0];
+            if (!op.equals("ins") && !op.equals("del")) continue;
+            int at;
+            try {
+                at = Integer.parseInt(f[1]);
+            } catch (NumberFormatException bad) {
+                continue;
+            }
+            String what = f.length > 2 ? f[2] : "";
+            edits.add(new Journal.Edit(now, op.equals("ins") ? "typed" : "deleted", at, what));
+        }
+        if (!edits.isEmpty()) journal.edits(account, screen, edits);
+    }
+
     private Res routeJournal(Req r) {
         if (!r.isPost()) return Res.json(405, Json.obj("error", "POST only"));
         var account = authorise(r);
@@ -1348,7 +1648,7 @@ public final class SueServer {
                 in.getOrDefault("os", "?"),
                 in.getOrDefault("arch", "?"),
                 Agents.Access.of(in.get("access")));
-        System.out.printf("sue: %s registered agent %s (%s %s, %s)%n",
+        System.out.printf("maos: %s registered agent %s (%s %s, %s)%n",
                 account.id(), agent.name, agent.os, agent.arch, agent.access.id);
         return Res.json(200, Json.obj("agent", agent.id, "token", agent.token,
                 "access", agent.access.id));
@@ -1444,8 +1744,8 @@ public final class SueServer {
         if (account == null) return unauthorised();
 
         String want = r.path().contains("?") ? "" : "";
-        var q = new QueryStringDecoder("/?" + (r.header().apply("X-Sue-Op") == null
-                ? "" : "name=" + r.header().apply("X-Sue-Op")));
+        var q = new QueryStringDecoder("/?" + (header(r, "Op") == null
+                ? "" : "name=" + header(r, "Op")));
         var names = q.parameters().get("name");
         if (names != null && !names.isEmpty()) {
             var op = scripts.byName(names.get(0));
@@ -1459,13 +1759,47 @@ public final class SueServer {
                     "code", Base64.getEncoder().encodeToString(op.blob().code())));
         }
 
+        var worth = new java.util.ArrayList<Scripts.Script>();
+        for (var op : scripts.nativeOps(opsMinimumUses)) {
+            if (!refusals.refuses(account.id(), op.name())) worth.add(op);
+        }
+
+        /*
+         * The catalogue, in the shape the asking device can read.
+         *
+         * A kernel has no JSON parser and should not grow one to read a list of
+         * five things. So the default is one operation per line - name, size,
+         * hash, how many words it takes, and then the pattern to the end of the
+         * line - which is a handful of instructions to walk. `?format=json`
+         * gives the same list with its structure, for anything looking rather
+         * than installing. The behaviours endpoint made the same trade for the
+         * same reason.
+         *
+         * The pattern is rewritten on the way out: the device is told arity and
+         * not types, because it cannot check a type and must not pretend to.
+         * See Scripts.devicePattern.
+         */
+        if (!"json".equals(header(r, "Format"))) {
+            var text = new StringBuilder();
+            for (var op : worth) {
+                text.append(op.name()).append(' ')
+                    .append(op.blob().code().length).append(' ')
+                    .append(op.blob().sha()).append(' ')
+                    .append(op.parameters().size()).append(' ')
+                    .append(Scripts.devicePattern(op)).append('\n');
+            }
+            return new Res(200, "text/plain", text.toString().getBytes(StandardCharsets.UTF_8));
+        }
+
         var b = new StringBuilder("{\"ops\":[");
         boolean first = true;
-        for (var op : scripts.nativeOps()) {
+        for (var op : worth) {
             if (!first) b.append(',');
             first = false;
             b.append(Json.obj("name", op.name(), "pattern", op.pattern(),
+                    "device", Scripts.devicePattern(op),
                     "params", String.join(",", op.parameters()),
+                    "uses", op.hits().get(),
                     "bytes", op.blob().code().length, "sha", op.blob().sha()));
         }
         b.append("]}");
@@ -1491,7 +1825,7 @@ public final class SueServer {
     private Res routeBehaviours(Req r) {
         var account = authorise(r);
         if (account == null) return unauthorised();
-        if ("json".equals(r.header().apply("X-Sue-Format"))) {
+        if ("json".equals(header(r, "Format"))) {
             return new Res(200, "application/json",
                     behaviours.asJson().getBytes(StandardCharsets.UTF_8));
         }
@@ -1559,7 +1893,7 @@ public final class SueServer {
                     "could not open " + (url == null ? "that" : url) + ": " + page.error(),
                     "fetched", false));
         }
-        System.out.printf("sue: %s fetched %s (%d chars)%n",
+        System.out.printf("maos: %s fetched %s (%d chars)%n",
                 account.id(), page.url(), page.text().length());
         return Res.json(200, Json.obj("text", page.text(), "fetched", true,
                 "url", page.url()));
@@ -1572,9 +1906,18 @@ public final class SueServer {
         try {
             if (up) aws.provision(account);
             else aws.deprovision(account);
-            return Res.json(200, Json.obj("instance", account.instance()));
+            // The name goes back with it, because this is the one call the
+            // editor makes before it will start: it is asking the far side who
+            // it is talking to, and an instance id is not an answer to that.
+            return Res.json(200, Json.obj("instance", account.instance(),
+                    "name", account.name()));
         } catch (Exception x) {
-            return Res.json(502, Json.obj("error", "ec2: " + x.getMessage()));
+            // Say who they are even when the machine could not be brought up.
+            // The session is what authorises; the instance is a convenience,
+            // and an editor that refused to start because EC2 was busy would
+            // be refusing for the wrong reason.
+            return Res.json(200, Json.obj("instance", "", "name", account.name(),
+                    "error", "ec2: " + trim(x.getMessage())));
         }
     }
 
@@ -1635,7 +1978,7 @@ public final class SueServer {
         }
         account.wallet(wallet);
         accounts.persist();
-        System.out.printf("sue: %s bound a wallet%n", account.id());
+        System.out.printf("maos: %s bound a wallet%n", account.id());
         return Res.json(200, Json.obj("bound", true,
                 "complete", !account.awsKey().isBlank()));
     }
@@ -1663,7 +2006,7 @@ public final class SueServer {
         String secret = in.getOrDefault("secret", "").trim();
         try {
             if (id.isEmpty() || secret.isEmpty()) {
-                var request = aicoin.authorize("sue",
+                var request = aicoin.authorize("maos",
                         "an editor that writes its own operations");
                 return Res.json(200, Json.obj("id", request.id(), "secret", request.secret()));
             }
@@ -1673,7 +2016,7 @@ public final class SueServer {
             }
             account.wallet(token);
             accounts.persist();
-            System.out.printf("sue: %s bound a wallet by scan%n", account.id());
+            System.out.printf("maos: %s bound a wallet by scan%n", account.id());
             return Res.json(200, Json.obj("bound", true,
                     "complete", !account.awsKey().isBlank()));
         } catch (Exception x) {
@@ -1729,7 +2072,7 @@ public final class SueServer {
         fields.put("region", region);
         account.clouds().bind(Clouds.Provider.AWS, fields);
         accounts.persist();
-        System.out.printf("sue: %s bound AWS access in %s%n", account.id(), region);
+        System.out.printf("maos: %s bound AWS access in %s%n", account.id(), region);
         return Res.json(200, Json.obj("bound", true,
                 "complete", !account.wallet().isBlank()));
     }
@@ -1771,8 +2114,24 @@ public final class SueServer {
      * The key may arrive with the backend address appended - that is what lets
      * a device carry one property - so match on the part before the '@'.
      */
+    /**
+     * One header, under any name this project has given it.
+     *
+     * A key on a device was issued by a server that called the header
+     * X-Sue-Key, and the device sends what it was built to send. The name
+     * changed here; nothing changed out there. A device is not a deployment -
+     * there is no configuration file to edit and no restart that would help -
+     * so refusing the old name would lock out every device already in use
+     * until each one was rebuilt and re-registered.
+     */
+    private static String header(Req r, String name) {
+        String v = r.header().apply("X-Maos-" + name);
+        if (v == null) v = r.header().apply("X-Sue-" + name);
+        return v;
+    }
+
     private Accounts.Account authorise(Req r) {
-        String key = r.header().apply("X-Sue-Key");
+        String key = header(r, "Key");
         if (key != null) {
             int at = key.indexOf('@');
             if (at >= 0) key = key.substring(0, at);
@@ -1783,7 +2142,7 @@ public final class SueServer {
     }
 
     private static Res unauthorised() {
-        return Res.json(401, Json.obj("error", "unknown or missing sue key"));
+        return Res.json(401, Json.obj("error", "unknown or missing maos key"));
     }
 
     /** Widgets take behaviour; content takes instructions. */
@@ -1804,19 +2163,56 @@ public final class SueServer {
     }
 
     /**
-     * A setting, under its name today or the one it had before the rename.
+     * A field that was filled in with a word meaning "not filled in".
      *
-     * Every SUE_ variable was an ARMEDIT_ one, and they live in shell
-     * profiles, systemd units and compose files that nobody edits because the
-     * server is running. Dropping the old names would take a deployment's
-     * configuration away without failing - it would start, with defaults, and
-     * behave like a fresh install. So the old name is read when the new one is
-     * unset, and the new one wins when both are there.
+     * Blank is the honest form and rare, because a required field gets
+     * something typed into it. What actually arrives is "unset", "none", "x" -
+     * whatever the person or the script writing the registration reached for
+     * to get past a check. Treating those as credentials is how an account
+     * ends up holding access that cannot work.
      */
+    private static boolean unset(String v) {
+        if (v == null || v.isBlank()) return true;
+        String k = v.strip().toLowerCase(java.util.Locale.ROOT);
+        return k.equals("unset") || k.equals("none") || k.equals("null") || k.equals("-");
+    }
+
+    /** A message worth putting in a reply: one line, and not an essay of XML. */
+    private static String trim(String message) {
+        if (message == null || message.isBlank()) return "no reason given";
+        String one = message.replaceAll("\\s+", " ").strip();
+        return one.length() > 200 ? one.substring(0, 200) + "..." : one;
+    }
+
+    /**
+     * A setting, under its name today or any name it has had.
+     *
+     * This project has been called three things. Every MAOS_ variable was a
+     * SUE_ one and an ARMEDIT_ one before that, and they live in shell
+     * profiles, systemd units and compose files that nobody edits because the
+     * server is running. Dropping an old name would take a deployment's
+     * configuration away without failing - the server would start, with
+     * defaults, and behave like a fresh install, which is the worst way to
+     * find out that a rename happened.
+     *
+     * So every name is read, newest first, and the list only ever grows. It
+     * costs two lookups of a map that is already in memory.
+     */
+    private static final java.util.List<String> PREFIXES =
+            java.util.List.of("MAOS_", "SUE_", "ARMEDIT_");
+
     private static String env(String name, String fallback) {
         String v = System.getenv(name);
         if (v == null || v.isBlank()) {
-            v = System.getenv(name.startsWith("SUE_") ? "ARMEDIT_" + name.substring(4) : name);
+            for (var was : PREFIXES) {
+                if (!name.startsWith(was)) continue;
+                String bare = name.substring(was.length());
+                for (var now : PREFIXES) {
+                    v = System.getenv(now + bare);
+                    if (v != null && !v.isBlank()) break;
+                }
+                break;
+            }
         }
         return (v == null || v.isBlank()) ? fallback : v.trim();
     }

@@ -68,6 +68,11 @@ final class Release {
      * loaded at run time, so they are never a reason to restart.
      */
     static boolean needsReboot(String path) {
+        // A path nobody has is not boot code. Said here rather than left to
+        // throw, because the one caller walks a list of files that were just
+        // written and a null in it would take down the thread that publishes
+        // operations - a crash whose symptom is that shipping silently stops.
+        if (path == null) return false;
         String p = path.replace('\\', '/');
         if (p.startsWith("ops/") || p.startsWith("./ops/")) return false;
         for (var prefix : BOOT_CODE) {

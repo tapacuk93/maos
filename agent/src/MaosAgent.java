@@ -8,7 +8,7 @@ import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 /**
- * The sue agent: a machine volunteering itself to an account.
+ * The maos agent: a machine volunteering itself to an account.
  *
  * It runs on a laptop, a workstation, a box under a desk - anything that
  * already exists and is not worth provisioning. It registers with the
@@ -22,9 +22,9 @@ import java.util.concurrent.TimeUnit;
  * ceiling, not a grant, and the refused list applies at every level.
  *
  * Run it:
- *   java agent/src/SueAgent.java --key <sue key> [--access read-only|confirmed|full]
+ *   java agent/src/MaosAgent.java --key <maos key> [--access read-only|confirmed|full]
  */
-public final class SueAgent {
+public final class MaosAgent {
 
     /** How long to wait between polls when there is nothing to do. */
     private static final int IDLE_POLL_SECONDS = 3;
@@ -44,7 +44,7 @@ public final class SueAgent {
     private String agentId = "";
     private String token = "";
 
-    private SueAgent(String base, String key, String name, String access) {
+    private MaosAgent(String base, String key, String name, String access) {
         this.base = base;
         this.key = key;
         this.name = name;
@@ -52,15 +52,15 @@ public final class SueAgent {
     }
 
     public static void main(String[] args) throws Exception {
-        String key = arg(args, "--key", System.getenv("SUE_KEY"));
+        String key = arg(args, "--key", System.getenv("MAOS_KEY"));
         String access = arg(args, "--access", "confirmed");
         String name = arg(args, "--name", hostName());
 
         if (key == null || key.isBlank()) {
             System.err.println("""
-                    sue-agent: no key.
+                    maos-agent: no key.
 
-                      java agent/src/SueAgent.java --key <sue key> [--access confirmed]
+                      java agent/src/MaosAgent.java --key <maos key> [--access confirmed]
 
                     The key is the one the registration page issued. It carries the address of
                     the backend to call, so there is nothing else to configure.""");
@@ -78,7 +78,7 @@ public final class SueAgent {
         }
         String base = addr.startsWith("http") ? addr : "http://" + addr;
 
-        var agent = new SueAgent(base, secret, name, access);
+        var agent = new MaosAgent(base, secret, name, access);
         agent.register();
         agent.loop();
     }
@@ -94,7 +94,7 @@ public final class SueAgent {
         agentId = in.getOrDefault("agent", "");
         token = in.getOrDefault("token", "");
         if (token.isBlank()) throw new IllegalStateException("registration refused: " + res);
-        System.out.printf("sue-agent: %s registered as %s, %s access%n", name, agentId, access);
+        System.out.printf("maos-agent: %s registered as %s, %s access%n", name, agentId, access);
     }
 
     /**
@@ -113,7 +113,7 @@ public final class SueAgent {
                     TimeUnit.SECONDS.sleep(IDLE_POLL_SECONDS);
                     continue;
                 }
-                System.out.printf("sue-agent: running %s%n", command);
+                System.out.printf("maos-agent: running %s%n", command);
                 var result = run(command);
                 post("/api/agents/result", Json.obj(
                         "token", token, "job", job,
@@ -123,7 +123,7 @@ public final class SueAgent {
                 return;
             } catch (Exception x) {
                 // A backend that is down is a thing to wait out, not to die of.
-                System.out.printf("sue-agent: %s%n", x.getMessage());
+                System.out.printf("maos-agent: %s%n", x.getMessage());
                 try {
                     TimeUnit.SECONDS.sleep(5);
                 } catch (InterruptedException e) {
@@ -168,7 +168,7 @@ public final class SueAgent {
         var b = HttpRequest.newBuilder(URI.create(base + path))
                 .timeout(Duration.ofSeconds(60))
                 .header("Content-Type", "application/json");
-        if (withKey) b.header("X-Sue-Key", key);
+        if (withKey) b.header("X-Maos-Key", key);
         var res = http.send(b.POST(HttpRequest.BodyPublishers.ofString(body)).build(),
                 HttpResponse.BodyHandlers.ofString());
         if (res.statusCode() / 100 != 2) {

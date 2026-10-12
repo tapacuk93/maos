@@ -462,7 +462,7 @@ final class Scripts {
                 try {
                     text = Js.run(s.js(), s.arguments(), s.argumentsFor(bound, ctx));
                 } catch (RuntimeException x) {
-                    System.out.printf("sue: script \"%s\" failed: %s%n", s.name(), x);
+                    System.out.printf("maos: script \"%s\" failed: %s%n", s.name(), x);
                     continue;
                 }
                 if (text == null || text.isBlank()) continue;
@@ -482,7 +482,7 @@ final class Scripts {
                     if (vm.spent(s.code())) {
                         scripts.remove(normalise(s.pattern()), s);
                         evicted.incrementAndGet();
-                        System.out.printf("sue: script \"%s\" dropped - it stopped coming back%n",
+                        System.out.printf("maos: script \"%s\" dropped - it stopped coming back%n",
                                 s.name());
                     }
                     continue;
@@ -553,7 +553,7 @@ final class Scripts {
             for (var t : tokens) if (t.isVar()) params.add(t.var().name());
             for (var a : AMBIENT) {
                 if (!params.contains(a)) continue;
-                System.out.printf("sue: script \"%s\" refused: \"%s\" is given to every "
+                System.out.printf("maos: script \"%s\" refused: \"%s\" is given to every "
                         + "operation already%n", name, a);
                 refused.incrementAndGet();
                 params = null;
@@ -567,7 +567,7 @@ final class Scripts {
                 try {
                     blob = Js.compile(name, script, params);
                 } catch (RuntimeException x) {
-                    System.out.printf("sue: script \"%s\" rejected: %s%n", name, x.getMessage());
+                    System.out.printf("maos: script \"%s\" rejected: %s%n", name, x.getMessage());
                     refused.incrementAndGet();
                     continue;
                 }
@@ -580,7 +580,7 @@ final class Scripts {
                 if (code == null) {
                     // The code was refused, but a template may have come with
                     // it, and half a script is better than none.
-                    System.out.printf("sue: script \"%s\" not compiled: %s%n", name, why);
+                    System.out.printf("maos: script \"%s\" not compiled: %s%n", name, why);
                     if (body.isEmpty()) { refused.incrementAndGet(); continue; }
                 }
             }
@@ -687,6 +687,57 @@ final class Scripts {
                 make connections, start processes or use reflection, and a
                 body that mentions those is refused outright.
 
+                WRITING ONE THAT LEAVES THIS MACHINE
+
+                #JAVA runs here and only here. Write #JS instead and the same
+                body is compiled to aarch64 machine code, which changes what
+                happens to it afterwards:
+
+                  - it answers the next person from this server, as #JAVA does;
+                  - once it has been wanted often enough, the machine code is
+                    sent to devices, which install it and answer with no
+                    network at all - no server, no model, no round trip;
+                  - and if a panel of models separately agrees the operation
+                    should exist, it is committed into the project, so it is in
+                    the next release of the editor itself.
+
+                That is the whole ladder: you answer once, the server answers
+                the next one, and eventually nobody has to answer because the
+                thing is part of what the editor is. #JS is the rung that
+                reaches past this server, so prefer it whenever the operation
+                could run on a device, which is most of them.
+
+                The subset is small and is checked at compile time here, where
+                you can be told, rather than on a device where nobody could be:
+
+                    let, for a local
+                    integers and strings
+                    +  -  *      and + joins strings
+                    ==  !=  <  >  <=  >=
+                    if / else, while, return
+                    the arguments you were passed, and screen, subject
+                    and selection, which arrive whether you named them or not
+
+                That list is exhaustive, and the omissions are the ones that
+                catch everybody: there is no && and no ||, no !, no division,
+                no arrays, no objects, no method calls - not even
+                name.length - no floating point and no exceptions. Nest the
+                ifs where you would have written &&, and write the else where
+                you would have written ||.
+
+                A body that reaches outside the subset is refused, and
+                whatever template came with it is kept, so the answer survives
+                - but nothing reaches a device. Write inside it when you can:
+
+                    #SCRIPT set-colour :: colours {name:colour}
+                    #JS
+                    if (name == "blue") { return "#COLOUR 3"; }
+                    if (name == "red") { return "#COLOUR 4"; }
+                    return "";
+                    #END
+
+                Returning "" is the same "not me" that null is under #JAVA.
+
                 Write this after your answer; it is stripped out before the
                 user sees anything.
 
@@ -718,9 +769,62 @@ final class Scripts {
 
     /** Every operation that exists as machine code, for a device to fetch. */
     List<Script> nativeOps() {
+        return nativeOps(0);
+    }
+
+    /**
+     * The ones worth putting on a device: compiled, and asked for this often.
+     *
+     * Compiling is cheap and shipping is not. A blob on a device is a page of
+     * memory, a round trip on startup, and a thing that can be wrong there
+     * rather than here - where "here" is a server that can be fixed in one
+     * place. None of that is worth spending on an operation one person asked
+     * for once, however neatly it compiled.
+     *
+     * Repetition is the evidence, and it is the same evidence the whole system
+     * runs on. A pattern that has answered people several times is a pattern
+     * people have; one that has answered nobody is a guess a model made about
+     * what people might want. Only the first kind is worth carrying around.
+     *
+     * Aliases count towards the operation they are aliases of - "cls" and
+     * "clear" are one request typed twice, and a device that ships the answer
+     * to it answers both.
+     */
+    List<Script> nativeOps(int minimumUses) {
         var out = new ArrayList<Script>();
-        for (var s : scripts.values()) if (s.blob() != null) out.add(s);
+        var seen = new java.util.HashSet<String>();
+        for (var s : scripts.values()) {
+            if (s.blob() == null || s.hits().get() < minimumUses) continue;
+            // One entry per operation, whatever it is called from: the device
+            // matches on patterns and would otherwise hold the same code twice.
+            if (seen.add(s.name())) out.add(s);
+        }
         return out;
+    }
+
+    /**
+     * The pattern as a device reads it: the types spent, the arity kept.
+     *
+     * {@code colours {name:colour}} becomes {@code colours {}} and
+     * {@code explain {this:words}} becomes {@code explain {*}}. The device has
+     * no colour table and no list of languages, and giving it one would put the
+     * same judgement in two places that can disagree - so it matches shape,
+     * runs the operation, and lets the operation decline, which is exactly what
+     * would have happened here.
+     *
+     * The same rewrite tools/mkops.py does for the operations baked into the
+     * binary. Two implementations of one rule, which is one too many, and they
+     * are kept apart only because one of them runs at build time with no server
+     * anywhere. If a third appears, this is the one to keep.
+     */
+    static String devicePattern(Script s) {
+        var b = new StringBuilder();
+        for (var t : s.tokens()) {
+            if (b.length() > 0) b.append(' ');
+            if (!t.isVar()) { b.append(t.literal()); continue; }
+            b.append(t.var().kind() == Kind.WORDS ? "{*}" : "{}");
+        }
+        return b.toString();
     }
 
     Script byName(String name) {
@@ -738,6 +842,46 @@ final class Scripts {
              .append(")\n");
         }
         return b.toString();
+    }
+
+    /** The script kept under this exact pattern, or null. */
+    Script byPattern(String pattern) {
+        return pattern == null ? null : scripts.get(normalise(pattern));
+    }
+
+    /**
+     * Another way of saying something already answered.
+     *
+     * "clear the screen", "clear", "cls" are one request typed three ways, and
+     * the pattern matcher sees three unrelated strings. Only something that
+     * understands language can say they are the same, so something that
+     * understands language is asked - once, the first time a phrasing turns up
+     * - and the answer is written down here as a second pattern for the script
+     * that was already there.
+     *
+     * <b>Literals only.</b> An alias is a sentence somebody actually typed,
+     * with no variables in it, so it matches exactly that sentence and nothing
+     * else. That is what makes it safe to add without the specificity test the
+     * taught patterns have to pass: the test exists to stop a pattern of mostly
+     * free variables swallowing unrelated requests, and a pattern with no
+     * variables cannot swallow anything.
+     *
+     * <b>The uses are shared.</b> The alias is not a second operation and must
+     * not look like one: three phrasings of the same request are one request
+     * being made three times, and that is exactly the number that decides
+     * whether it is worth compiling and shipping to devices.
+     */
+    Script alias(Script of, String phrase) {
+        if (of == null) return null;
+        String pattern = normalise(phrase);
+        if (pattern.isBlank() || pattern.length() > 200) return null;
+        if (scripts.size() >= MAX_SCRIPTS || scripts.containsKey(pattern)) return null;
+        var tokens = compile(pattern);
+        if (tokens.isEmpty()) return null;
+        for (var t : tokens) if (t.isVar()) return null;
+        var a = new Script(of.name(), pattern, tokens, of.conditions(), of.body(), of.code(),
+                of.js(), of.blob(), of.author(), System.currentTimeMillis(), of.hits());
+        return scripts.putIfAbsent(pattern, a) == null ? a : null;
     }
 
     /** Take one back out, by name, so the refresher can replace it. */

@@ -72,6 +72,42 @@ final class Clouds {
         }
     }
 
+    /**
+     * The backend's own cloud access, lent to accounts that brought none.
+     *
+     * Asking somebody to paste an access key and a secret before they can run
+     * a line of code is asking them to open an AWS account, work out what a
+     * policy is, and get it wrong once - to run something that takes two
+     * seconds. Almost nobody does it, and the ones who try arrive with
+     * credentials that half work, which is worse than none: the editor issues
+     * a key, accepts the request, and then reports an authentication failure
+     * from four layers down.
+     *
+     * So the backend can carry credentials of its own, and an account that
+     * gave none is bound to those at registration. From inside the editor
+     * there is nothing to notice - which is the point. Running something is
+     * not supposed to be an act of cloud administration.
+     *
+     * Static because it belongs to the process rather than to any account,
+     * and one field rather than a provider map because AWS is the only one
+     * provisioning is written for; the day a second is, this becomes a map
+     * and the callers do not change.
+     *
+     * Whoever runs the backend is paying for this. That is the honest reading
+     * of the arrangement and the reason it is opt-in: no environment
+     * variable, no house credentials, and registration goes back to requiring
+     * the caller's own.
+     */
+    private static volatile Credential house;
+
+    static void house(Map<String, String> fields) {
+        var c = new Credential(Provider.AWS, fields);
+        house = c.complete() ? c : null;
+    }
+
+    /** The backend's own AWS access, or null if it was never given any. */
+    static Credential house() { return house; }
+
     private final Map<Provider, Credential> bound = new LinkedHashMap<>();
 
     /** Bind, or replace, one provider's credentials. */

@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * under. Registration refuses anything less - issuing a key for half an
  * account would only fail later, further from the cause.
  *
- * The sue key is the one credential that ever leaves this process, and the
+ * The maos key is the one credential that ever leaves this process, and the
  * only one a device holds. It is the map key here and is never logged.
  */
 final class Accounts {
@@ -49,6 +49,17 @@ final class Accounts {
         private final String password;
         private final Otp otp;
         private final Clouds clouds = new Clouds();
+        /**
+         * What to call whoever this is, on their own screen.
+         *
+         * Given at registration or defaulted to the account id. It is not a
+         * credential and nothing is decided by it - the key is what
+         * authenticates - but it is the one thing the editor can show that
+         * says "the far side knows who you are", which is the only honest way
+         * for a machine to display a name at all. A name the device invented
+         * would say nothing.
+         */
+        private volatile String name = "";
         private volatile String instance = "";
         private volatile long lastSeenMillis = System.currentTimeMillis();
 
@@ -81,6 +92,8 @@ final class Accounts {
         String awsSecret() { return awsSecret; }
         String region() { return region; }
         String password() { return password; }
+        String name() { return name == null || name.isBlank() ? id : name; }
+        void name(String v) { name = v == null ? "" : v.strip(); }
         Otp otp() { return otp; }
 
         /** Every cloud this account has bound credentials for, AWS included. */
@@ -119,6 +132,17 @@ final class Accounts {
         }
 
         long idleMillis() { return System.currentTimeMillis() - lastSeenMillis; }
+    }
+
+    /**
+     * Is this something that could be a credential, rather than a word that
+     * was typed to get past a required field?  See MaosServer.unset - the same
+     * judgement, needed on both sides of the file.
+     */
+    private static boolean usable(String v) {
+        if (v == null || v.isBlank()) return false;
+        String k = v.strip().toLowerCase(java.util.Locale.ROOT);
+        return !(k.equals("unset") || k.equals("none") || k.equals("null") || k.equals("-"));
     }
 
     private final Map<String, Account> byKey = new ConcurrentHashMap<>();
@@ -178,23 +202,42 @@ final class Accounts {
                 long nanos = Long.parseLong(f[2]);
                 var account = new Account(id, nanos, f[3], f[4], f[5], f[6], f[7],
                         new Otp(serverSecret, nanos, id, f[7]));
-                // Credentials came back above, but the cloud binding built from
-                // them did not - and without it the model is never told it can
-                // run anything, which looks like the model refusing rather than
-                // like a field that was not written down.
-                if (!account.awsKey().isBlank() && !account.awsSecret().isBlank()) {
+                // A ninth column if the file was written by a build that had
+                // one. Rows from before it are accounts whose name is their id,
+                // which is what name() already answers for an empty one.
+                if (f.length > 8) account.name(f[8]);
+                /*
+                 * Credentials came back above, but the cloud binding built from
+                 * them did not - and without it the model is never told it can
+                 * run anything, which looks like the model refusing rather than
+                 * like a field that was not written down.
+                 *
+                 * A row written before registration checked anything may hold a
+                 * word where a key belongs. Those accounts are working accounts
+                 * in every other respect and their keys are on devices, so they
+                 * are lent the backend's access here rather than being left
+                 * holding credentials that are known in advance to fail.
+                 */
+                if (usable(account.awsKey()) && usable(account.awsSecret())) {
                     account.clouds().bind(Clouds.Provider.AWS, java.util.Map.of(
                             "access_key", account.awsKey(),
                             "secret_key", account.awsSecret(),
                             "region", account.region()));
+                } else if (Clouds.house() != null) {
+                    var lent = Clouds.house().fields();
+                    account.aws(lent.get("access_key"), lent.get("secret_key"),
+                            lent.getOrDefault("region", "us-east-1"));
+                    account.clouds().bind(Clouds.Provider.AWS, lent);
+                    System.out.printf("maos: %s had no working cloud access; "
+                            + "lent this backend's own%n", account.id());
                 }
                 byKey.put(key, account);
                 long n = Long.parseLong(id.substring(id.lastIndexOf('-') + 1));
                 if (n > seq.get()) seq.set(n);
             }
-            System.out.printf("sue: %d account(s) restored%n", byKey.size());
+            System.out.printf("maos: %d account(s) restored%n", byKey.size());
         } catch (Exception x) {
-            System.out.printf("sue: could not read %s (%s) - starting empty rather than "
+            System.out.printf("maos: could not read %s (%s) - starting empty rather than "
                     + "overwriting it%n", path, x);
             this.store = null;
         }
@@ -224,7 +267,8 @@ final class Accounts {
                 out.append(e.getKey()).append('\t').append(a.id()).append('\t')
                    .append(a.createdNanos()).append('\t').append(a.wallet()).append('\t')
                    .append(a.awsKey()).append('\t').append(a.awsSecret()).append('\t')
-                   .append(a.region()).append('\t').append(a.password()).append('\n');
+                   .append(a.region()).append('\t').append(a.password())
+                   .append('\t').append(a.name()).append('\n');
             }
             if (store.getParent() != null) java.nio.file.Files.createDirectories(store.getParent());
             var tmp = store.resolveSibling(store.getFileName() + ".new");
@@ -233,7 +277,7 @@ final class Accounts {
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                     java.nio.file.StandardCopyOption.ATOMIC_MOVE);
         } catch (Exception x) {
-            System.out.printf("sue: could not save accounts: %s%n", x);
+            System.out.printf("maos: could not save accounts: %s%n", x);
         }
     }
 
@@ -242,11 +286,17 @@ final class Accounts {
      * past guessing, still short enough to paste into an environment variable.
      */
     Issued create(String wallet, String awsKey, String awsSecret, String region, String password) {
+        return create(wallet, awsKey, awsSecret, region, password, "");
+    }
+
+    Issued create(String wallet, String awsKey, String awsSecret, String region,
+                  String password, String name) {
         var now = Instant.now();
         long nanos = now.getEpochSecond() * 1_000_000_000L + now.getNano();
         String id = "acct-%06d".formatted(seq.incrementAndGet());
         var account = new Account(id, nanos, wallet, awsKey, awsSecret, region, password,
                 new Otp(serverSecret, nanos, id, password));
+        account.name(name);
         var raw = new byte[24];
         rng.nextBytes(raw);
         String key = HexFormat.of().formatHex(raw);
