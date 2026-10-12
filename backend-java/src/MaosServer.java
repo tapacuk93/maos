@@ -1280,7 +1280,13 @@ public final class MaosServer {
  * could only ever be answered with a paragraph about how it behaves.
  */
         if (!instruction.isBlank()) {
-            prompt.append(preflight.gather(account.wallet(), instruction));
+            // The room left, rather than a number somebody picked: the far side
+            // refuses a request built past its limit before any provider sees
+            // it, so the one outcome worse than sending no source is sending
+            // source that makes the whole request fail.
+            int room = Integer.parseInt(env("MAOS_PROMPT_LIMIT", "400000"))
+                    - prompt.length() - context.length() - 8_000;
+            prompt.append(preflight.gather(account.wallet(), instruction, room));
         }
         prompt.append("THE EDITOR IS:\n")
               .append("  text size ").append(parseInt(in.getOrDefault("scale", "2"), 2))

@@ -55,6 +55,27 @@ class PreflightTest {
     }
 
     @Test
+    void theFilesAQuestionWouldBeAboutAreNotTooBigToRead() throws Exception {
+        // The first version capped a single file at twenty-four thousand
+        // characters, which excluded the USB driver, the editor core, the
+        // client and the server - every file a question about the machine could
+        // possibly be about. It would name the right one and read none of it.
+        for (String big : new String[]{"kernel/arch/aarch64/xhci.S", "editor/editor.S",
+                                       "app/backend_client.S"}) {
+            Path p = PROJECT.resolve(big);
+            assertTrue(Files.size(p) > 24_000, big + " is no longer the large case");
+        }
+        assertTrue(Preflight.DEFAULT_ROOM > 200_000,
+                "the budget has to hold the files the questions are about");
+    }
+
+    @Test
+    void noRoomMeansNoSourceRatherThanARequestThatWillBeRefused() {
+        var p = on(PROJECT);
+        assertEquals("", p.gather("wallet", "the keyboard driver does not see my keyboard", 500));
+    }
+
+    @Test
     void itCannotNameAnythingOutsideTheProject(@TempDir Path dir) throws Exception {
         Files.writeString(dir.resolve("secret"), "not yours");
         var inner = Files.createDirectory(dir.resolve("inner"));

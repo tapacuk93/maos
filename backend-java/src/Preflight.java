@@ -44,11 +44,22 @@ final class Preflight {
     /** Files to read for one question. Past this it is not a question. */
     private static final int MAX_FILES = 6;
 
-    /** And how much of them, in bytes, before the real prompt is crowded out. */
-    private static final int MAX_BYTES = 60_000;
-
-    /** A single file this large is a generated blob, not something to read. */
-    private static final int MAX_ONE = 24_000;
+    /**
+     * How much source one answer may be given, in characters.
+     *
+     * A number with a reason rather than a guess: it is the room the far side
+     * will accept, less what the rest of the prompt is already using, and the
+     * caller passes the second part because only the caller knows it.
+     *
+     * The first version of this had two fixed caps - sixty thousand in total
+     * and twenty-four thousand per file - and both were wrong in the same
+     * direction. Twelve files in this project are larger than twenty-four
+     * thousand characters, and they are the twelve a question about the machine
+     * would ever be about: the USB driver, the editor core, the client, the
+     * server. The mechanism would name exactly the right file and then silently
+     * read none of it.
+     */
+    static final int DEFAULT_ROOM = 360_000;
 
     /**
      * Below this many words a request is about the document, not the machine.
@@ -82,9 +93,21 @@ final class Preflight {
      * going to answer from the briefings can still answer from the briefings.
      */
     String gather(String wallet, String instruction) {
+        return gather(wallet, instruction, DEFAULT_ROOM);
+    }
+
+    /**
+     * @param room characters of source this answer may be given, which is what
+     *             the far side accepts less what the prompt already holds. A
+     *             request built past that limit is refused before any provider
+     *             sees it, so sending the files and finding out is the one
+     *             outcome worse than not sending them.
+     */
+    String gather(String wallet, String instruction, int room) {
         if (!available()) return "";
         if (instruction == null || instruction.isBlank()) return "";
         if (instruction.strip().split("\\s+").length < MIN_WORDS) return "";
+        if (room < 2_000) return "";
 
         String said;
         try {
@@ -100,7 +123,7 @@ final class Preflight {
         }
 
         var out = new StringBuilder();
-        int budget = MAX_BYTES;
+        int budget = room;
         int taken = 0;
         for (String line : said.split("\n")) {
             if (taken >= MAX_FILES || budget <= 0) break;
@@ -139,7 +162,6 @@ final class Preflight {
         try {
             Path p = root.resolve(named).normalize();
             if (!p.startsWith(root) || !Files.isRegularFile(p)) return null;
-            if (Files.size(p) > MAX_ONE) return null;
             String body = Files.readString(p);
             // Something whose bytes are not text is a blob somebody generated,
             // and a model reading one learns nothing but spends the budget a
