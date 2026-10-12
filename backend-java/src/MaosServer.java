@@ -70,6 +70,7 @@ public final class MaosServer {
     private final Refusals refusals;
     private final Preflight preflight;
     private final Workers workers;
+    private final Contexts contexts;
     private final Consensus consensus = new Consensus();
     private final Behaviours behaviours;
     private final Catalogue catalogue;
@@ -96,12 +97,19 @@ public final class MaosServer {
         // can be answered from it. ".." because the backend runs one directory
         // down, the same place MAOS_OPS_DIR is relative to.
         var source = java.nio.file.Path.of(env("MAOS_SOURCE_DIR", ".."));
-        this.preflight = new Preflight(aicoin, source);
         // A tree per person, on their own branch, kept warm. See Workers: the
         // sources that describe somebody's machine are the ones their machine
         // is built from, and working them out is the same work every time.
         this.workers = new Workers(source,
                 java.nio.file.Path.of(env("MAOS_WORKERS_DIR", "../.maos-workers")));
+        // What was gathered for one question, kept for the next. An hour by
+        // default: long enough that a session of questions about one thing
+        // pays for the gathering once, short enough that it is not describing
+        // a machine from yesterday.
+        this.contexts = new Contexts(
+                java.nio.file.Path.of(env("MAOS_CONTEXT_DIR", "../.maos-contexts")),
+                Long.parseLong(env("MAOS_CONTEXT_SECONDS", "3600")));
+        this.preflight = new Preflight(aicoin, source, contexts);
         this.aws = new Aws(
                 env("MAOS_AWS_ADDR", ""),
                 env("MAOS_AMI", ""),
@@ -917,6 +925,32 @@ public final class MaosServer {
         return m.find() ? m.group(1).charAt(0) - '0' : -1;
     }
 
+    /**
+     * A request that is this person's alone.
+     *
+     * $$ already marks text the server may not keep - see Cache. Three of them
+     * at the front of a request mean the same thing about the request itself:
+     * build this for me, and for nobody else. Nothing is cached from it,
+     * nothing is counted towards other people wanting it, no operation is
+     * taught out of it, and any change it makes goes to this account's own
+     * branch rather than towards the project.
+     *
+     * Explicit rather than inferred. The system's whole direction is that what
+     * one person needed becomes what everybody has, and the way out of that has
+     * to be something somebody typed on purpose - a heuristic that sometimes
+     * decided a request was personal would make the direction unreliable in
+     * both directions at once.
+     */
+    static boolean personal(String instruction) {
+        return instruction != null && instruction.stripLeading().startsWith("$$$");
+    }
+
+    /** The request without the mark, which is what anybody should be shown. */
+    static String withoutMark(String instruction) {
+        if (!personal(instruction)) return instruction;
+        return instruction.stripLeading().substring(3).strip();
+    }
+
     static boolean wholeIn(String reply) {
         return reply != null && WHOLE_DIRECTIVE.matcher(reply).find();
     }
@@ -1201,6 +1235,10 @@ public final class MaosServer {
         String cursor = in.getOrDefault("cursor", "");
         String selection = in.getOrDefault("selection", "");
         String instruction = in.getOrDefault("instruction", "");
+        // The mark is for this server, not for the model: it decides where the
+        // answer may go, and the question it is attached to reads the same with
+        // it taken off.
+        String asked = withoutMark(instruction);
         String subject = in.getOrDefault("subject", "");
         int screen = parseInt(in.getOrDefault("screen", "1"), 1);
         recordJournal(account, screen, in.get("journal"));
@@ -1267,7 +1305,20 @@ public final class MaosServer {
         }
         if (!instruction.isBlank()) {
             prompt.append("THIS IS WHAT YOUR REPLY WILL REPLACE:\n")
-                  .append(instruction).append("\n\n");
+                  .append(asked).append("\n\n");
+            if (personal(instruction)) {
+                prompt.append("""
+                        THIS ONE IS THEIRS ALONE
+
+                        They marked it. Whatever you build here is for this
+                        person and goes to their own branch: do not write an
+                        operation for it, do not generalise it, and do not
+                        weigh whether anybody else would want it. The usual
+                        question - is this general enough to keep - has been
+                        answered, and the answer was no.
+
+                        """);
+            }
         }
 /*
  * What the editor looks like right now.
@@ -1300,7 +1351,7 @@ public final class MaosServer {
             // source that makes the whole request fail.
             int room = Integer.parseInt(env("MAOS_PROMPT_LIMIT", "400000"))
                     - prompt.length() - context.length() - 8_000;
-            var gathered = preflight.decide(account.wallet(), instruction, room,
+            var gathered = preflight.decide(account.wallet(), asked, room,
                     workers.forAccount(account.id()));
             prompt.append(gathered.text());
             needs = gathered.needs();
@@ -1346,7 +1397,13 @@ public final class MaosServer {
 
         // Somebody may already have paid for this one.  Only ever true when
         // nothing of theirs went into the asking - see Cache.shareable.
-        boolean shareable = Cache.shareable(instruction, context, baseline, selection, subject);
+        // Three dollars at the front is somebody saying this one is theirs. It
+        // is not a hint: it turns off the cache, the counting, the scripting
+        // and the promotion, all of which exist to carry one person's answer to
+        // everybody else.
+        boolean mine = personal(instruction);
+        boolean shareable = !mine
+                && Cache.shareable(instruction, context, baseline, selection, subject);
         // Asking the same thing twice in quick succession is somebody saying
         // the answer was wrong. It is the only such signal there is, so it is
         // worth acting on: forget what was remembered and go and ask properly,
@@ -1443,7 +1500,11 @@ public final class MaosServer {
                 + (needs.wants("models") ? "\n\n" + catalogue.briefing()
                                          + stats.briefing(names, category) : "")
                 + (shareable && needs.wants("operations") ? scripts.briefing() : "")
-                + (instruction.isBlank() ? "" : WHOLE_BRIEFING);
+                + (instruction.isBlank() ? "" : WHOLE_BRIEFING)
+                // Last, and on every request that could change anything: the
+                // two relations this machine is used on, which are not up for
+                // change however the request is phrased.
+                + (instruction.isBlank() ? "" : Covenant.briefing());
 
         // A second ask about the same screen within a minute is rarely a
         // compliment to the answer that came first, so it counts against

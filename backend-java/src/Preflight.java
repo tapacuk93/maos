@@ -121,11 +121,17 @@ final class Preflight {
     private final Aicoin aicoin;
     private final Path root;
     private final List<String> manifest;
+    private final Contexts contexts;
 
     Preflight(Aicoin aicoin, Path root) {
+        this(aicoin, root, null);
+    }
+
+    Preflight(Aicoin aicoin, Path root, Contexts contexts) {
         this.aicoin = aicoin;
         this.root = root.toAbsolutePath().normalize();
         this.manifest = manifest(this.root);
+        this.contexts = contexts;
     }
 
     boolean available() {
@@ -183,15 +189,31 @@ final class Preflight {
 
         List<String> named = worker == null ? null : worker.recall(instruction);
         if (named == null) {
+            String branch = worker == null ? "" : worker.branch();
+            var lying = contexts == null ? List.<Contexts.Bundle>of() : contexts.live(branch);
             String said;
             try {
-                said = aicoin.text(wallet, prompt(instruction, files), null, true);
+                said = aicoin.text(wallet, prompt(instruction, files, lying), null, true);
             } catch (Exception x) {
                 System.out.printf("maos: could not ask what \"%s\" needs: %s%n",
                         instruction, x.getMessage());
                 return nothing;
             }
             if (said == null || said.isBlank()) return nothing;
+
+            // "reuse ctx-..." - the same working set as a question somebody
+            // already paid to work out. Checked against this branch, because an
+            // id names a folder of somebody's source.
+            for (String line : said.split("\n")) {
+                String word = line.strip();
+                if (!word.toLowerCase(Locale.ROOT).startsWith("reuse ")) continue;
+                String kept = contexts == null ? null
+                        : contexts.reuse(word.substring(6).strip(), branch);
+                if (kept == null) continue;
+                System.out.printf("maos: \"%s\" takes a gathering that was already made%n",
+                        instruction);
+                return new Gathered(kept, new Needs(List.of(), java.util.Set.of(), true));
+            }
             named = List.of(said.split("\n"));
         }
 
@@ -222,7 +244,7 @@ final class Preflight {
                 kinds.isEmpty() ? "no other context" : kinds,
                 worker == null ? "" : " in " + worker.branch());
         if (taken == 0) return new Gathered("", needs);
-        return new Gathered("""
+        String text = """
                 THE PART OF THIS SYSTEM THE QUESTION IS ABOUT
 
                 These are the actual sources of the machine they are using, as
@@ -231,7 +253,14 @@ final class Preflight {
                 here, say which file you would want rather than guessing at its
                 contents.
 
-                """ + out, needs);
+                """ + out;
+        // Kept, so the next question about the same part of the machine is a
+        // call that answers "reuse that" rather than six file reads and a
+        // decision somebody already made.
+        if (contexts != null && worker != null) {
+            contexts.keep(worker.branch(), instruction, paths, List.copyOf(kinds), text);
+        }
+        return new Gathered(text, needs);
     }
 
     /**
@@ -260,7 +289,8 @@ final class Preflight {
         }
     }
 
-    private String prompt(String instruction, List<String> files) {
+    private String prompt(String instruction, List<String> files,
+                          List<Contexts.Bundle> lying) {
         var kinds = new StringBuilder();
         for (var e : KINDS.entrySet()) {
             kinds.append("    ").append(e.getKey())
@@ -288,6 +318,7 @@ final class Preflight {
                 The second is what is true right now rather than what is
                 written down:
 
+                %s
                 %s
                 Name only what answering this actually requires.
 
@@ -317,7 +348,48 @@ final class Preflight {
                 Every line you name is read in full and takes room from the
                 others, and every one that was not needed is something the
                 answering model has to read past to reach the question.
-                """.formatted(instruction, String.join("\n", files), kinds);
+                """.formatted(instruction, String.join("\n", files), kinds, already(lying));
+    }
+
+    /**
+     * What has already been gathered, offered rather than hidden.
+     *
+     * Somebody working on one thing asks about it several times, and the second
+     * question has the same working set as the first. Finding that out again
+     * costs a call and six file reads for an answer that has not changed - so
+     * what was gathered is still there, and this is where it is put in front of
+     * the model that would otherwise rebuild it.
+     *
+     * Each one says when it stops being offered, because a gathering is a
+     * reading of files at a moment and the honest thing to say about one is how
+     * old it is.
+     */
+    private static String already(List<Contexts.Bundle> lying) {
+        if (lying == null || lying.isEmpty()) return "";
+        long now = System.currentTimeMillis();
+        var b = new StringBuilder("""
+                And these were gathered for earlier questions about this same
+                machine, and are still here:
+
+                """);
+        int shown = 0;
+        for (var one : lying) {
+            if (shown++ == 8) break;
+            b.append(one.offer(now)).append('\n');
+        }
+        return b.append("""
+
+                If one of them is the working set this question needs - the same
+                files, about the same part of the system - reply with
+
+                    reuse <its name>
+
+                and nothing else. Prefer that to naming the same files again: it
+                is the same answer, already paid for. Do not reuse one that is
+                merely nearby; a working set that is almost right is a model
+                reading the wrong file carefully.
+
+                """).toString();
     }
 
     /**

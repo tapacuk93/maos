@@ -779,6 +779,58 @@ ed_zoom:
 3:      str     w10, [x9, #EDS_SCALE]
         ret
 
+/*
+ * ed_band - w0 = where a line starts; out w0 = 0, 1 for $$ or 2 for $$$.
+ *
+ * Two marks with two meanings, and they are not the same kind of thing.
+ *
+ * $$ is about privacy: the text after it is a reference to something the far
+ * side is never shown, substituted back on this machine. A line carrying one
+ * holds a secret that is nobody else's, and the editor says so.
+ *
+ * $$$ is about money: the request is this person's alone, so nothing is kept
+ * from it, nothing is counted towards anybody else wanting it, and the coins it
+ * spends are spent for them and not towards the project.
+ *
+ * Both are read here rather than anywhere cleverer because both are a property
+ * of the first characters of a line, and the editor is the one thing that sees
+ * the line before anybody decides anything about it.
+ */
+ed_band:
+        stp     x29, x30, [sp, #-32]!
+        mov     x29, sp
+        str     x19, [sp, #16]
+        mov     w19, w0
+        bl      ed_cur
+        ldr     w9, [x0, #SCR_LEN_OFF]
+        add     x10, x0, #SCR_TEXT_OFF
+        add     w11, w19, #1
+        cmp     w11, w9
+        b.hs    .Lband_none             /* two characters is the shortest mark */
+        ldrb    w12, [x10, w19, uxtw]
+        cmp     w12, #'$'
+        b.ne    .Lband_none
+        ldrb    w12, [x10, w11, uxtw]
+        cmp     w12, #'$'
+        b.ne    .Lband_none
+        add     w11, w11, #1
+        cmp     w11, w9
+        b.hs    .Lband_priv
+        ldrb    w12, [x10, w11, uxtw]
+        cmp     w12, #'$'
+        b.ne    .Lband_priv
+        mov     w0, #2
+        b       .Lband_out
+.Lband_priv:
+        mov     w0, #1
+        b       .Lband_out
+.Lband_none:
+        mov     w0, #0
+.Lband_out:
+        ldr     x19, [sp, #16]
+        ldp     x29, x30, [sp], #32
+        ret
+
 /* ed_home - the very start of this screen, scrolled back to the top */
 ed_home:
         stp     x29, x30, [sp, #-16]!
@@ -1809,6 +1861,9 @@ SYM(editor_render):
         str     wzr, [sp, #112]         /* index */
         str     wzr, [sp, #116]         /* row   */
         str     wzr, [sp, #120]         /* col   */
+        mov     w0, #0                  /* the band this line wears */
+        bl      ed_band
+        str     w0, [sp, #124]
 .Ldraw:
         ldr     w9, [sp, #112]
         cmp     w9, w26
@@ -1832,6 +1887,39 @@ SYM(editor_render):
         mul     w17, w15, w17
         ldr     w13, [sp, #140]
         add     w17, w17, w13
+
+/*
+ * A line that is marked wears its mark across the whole width.
+ *
+ * Behind the text rather than in it, because what is being said is about the
+ * line and not about any character of it: this line is private, or this line is
+ * yours alone. Colouring the letters would say it quietly, in a place somebody
+ * has to be looking already, and these two are exactly the lines nobody should
+ * be able to be surprised by.
+ *
+ * Painted on every row the line occupies, wraps included - the band follows the
+ * line rather than the row, which is why it is worked out once where the line
+ * begins and used here.
+ */
+        ldr     w11, [sp, #120]
+        cbnz    w11, .Lno_band          /* only at the left-hand edge */
+        ldr     w11, [sp, #124]
+        cbz     w11, .Lno_band
+        stp     x16, x17, [sp, #160]
+        sub     w11, w11, #1            /* 0 = private, 1 = theirs alone */
+        cbnz    w11, 8f
+        LDCOL   w6, COL_MARK_PRIV_LO, COL_MARK_PRIV_HI
+        b       9f
+8:      LDCOL   w6, COL_MARK_MINE_LO, COL_MARK_MINE_HI
+9:      mov     x0, x19
+        mov     w1, w20
+        mov     w2, #0                  /* the whole width, not the glyph */
+        mov     w3, w17
+        mov     w4, w21
+        ldr     w5, [sp, #136]
+        bl      SYM(fb_fill)
+        ldp     x16, x17, [sp, #160]
+.Lno_band:
 
         ldr     w9, [sp, #112]          /* is this byte inside the swipe? */
         sub     w9, w9, #1              /* the index before it advanced */
@@ -1885,6 +1973,9 @@ SYM(editor_render):
         ldr     w10, [sp, #116]
         add     w10, w10, #1
         str     w10, [sp, #116]
+        ldr     w0, [sp, #112]          /* the line that starts after it */
+        bl      ed_band
+        str     w0, [sp, #124]
         b       .Ldraw
 .Ldraw_done:
 

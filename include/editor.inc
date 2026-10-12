@@ -74,6 +74,15 @@
 #define COL_BAR         0xFF1D2228
 #define COL_CURSOR      0xFFE2B85A
 #define COL_SEL         0xFF2E4A3E      /* the swiped span, behind the text */
+/*
+ * The two marks, behind the whole line.
+ *
+ * Dark enough to read white text on, and far enough apart that nobody has to
+ * remember which is which: red is a line holding something the far side never
+ * sees, blue is a line whose request is this person's alone.
+ */
+#define COL_MARK_PRIV    0xFF5A2E2E      /* $$  - a secret of theirs */
+#define COL_MARK_MINE    0xFF2E3A5A      /* $$$ - their coins, their branch */
 
 /* Colours as movz/movk halves: a 32-bit constant needs two instructions, and
    spelling it out beats relying on a literal pool that only one of our two
@@ -90,6 +99,10 @@
 #define COL_CURSOR_HI   0xFFE2
 #define COL_SEL_LO      0x4A3E
 #define COL_SEL_HI      0xFF2E
+#define COL_MARK_PRIV_LO 0x2E2E
+#define COL_MARK_PRIV_HI 0xFF5A
+#define COL_MARK_MINE_LO 0x3A5A
+#define COL_MARK_MINE_HI 0xFF2E
 
 .macro  LDCOL reg, lo, hi
         mov     \reg, #\lo

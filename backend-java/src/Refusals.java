@@ -80,6 +80,14 @@ final class Refusals {
     /** Record one, and say whether it was new. */
     boolean refuse(String accountId, String what, String why) {
         if (accountId == null || what == null || what.isBlank()) return false;
+        // The two things that are not features cannot be refused either. A
+        // refusal is how somebody says "not for me" about a behaviour, and
+        // these are not behaviours - they are the terms the machine is used on.
+        if (Covenant.binds(what)) {
+            System.out.printf("maos: %s may not refuse %s - %s%n",
+                    accountId, what, Covenant.of(what).why());
+            return false;
+        }
         var mine = byAccount.computeIfAbsent(accountId, k -> new ConcurrentHashMap<>());
         boolean fresh = mine.putIfAbsent(what,
                 new Refusal(what, why == null ? "" : why.strip(), System.currentTimeMillis())) == null;
