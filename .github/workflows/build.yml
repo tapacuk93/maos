@@ -49,6 +49,12 @@ jobs:
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # clang assembles both targets and lld links the kernel. Neither is on
+      # the runner by default, and the kernel link fails with a bare "command
+      # not found" that says nothing about which command.
+      - name: The toolchain the build actually uses
+        run: sudo apt-get update && sudo apt-get install -y clang lld qemu-system-arm
+
       # The hosted builds are Mach-O and the kernel is ELF, and only one of
       # those can be linked here. So: assemble everything, link what links on
       # Linux, and run the tests that do not need a Mac to exist.
@@ -70,8 +76,5 @@ jobs:
       # emulation and take minutes rather than seconds - which is the right
       # trade for the only test that answers "does the thing still work".
       # The cases needing a backend skip themselves and say so.
-      - name: QEMU
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
-
       - name: The machine, end to end
         run: make e2e
