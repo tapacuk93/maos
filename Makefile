@@ -1,4 +1,4 @@
-# sue - every line of this project is assembled from .S sources.
+# maos - every line of this project is assembled from .S sources.
 #
 #   make            build everything buildable on this host
 #   make tty        hosted mode, terminal
@@ -19,7 +19,7 @@ INC      := -Iinclude
 # door that cannot be defended on somebody else's behalf: running machine code
 # the backend sent. See the note at op_install in app/ops.S.
 APP_STORE ?=
-APP_DEFS  := $(if $(APP_STORE),-DSUE_APP_STORE,)
+APP_DEFS  := $(if $(APP_STORE),-DMAOS_APP_STORE,)
 AS_MACHO := $(CC) $(INC) $(APP_DEFS) -arch arm64 -c
 KERNEL_DEFS ?=
 AS_ELF   := $(CC) $(INC) $(KERNEL_DEFS) -target aarch64-none-elf -c
@@ -53,9 +53,12 @@ $(OPS_TABLE): $(wildcard ops/*.op) $(wildcard ops/*.bin) tools/mkops.py
 	@mkdir -p $(B)
 	@python3 tools/mkops.py ops $@
 
+# net/sock.S because net/http.S calls it: the daemon resolves a name by asking
+# the network, like everything else that reaches one, and the link fails rather
+# than the resolution when it is left out.
 BACKEND_SRC := backend/daemon.S backend/page.S backend/util.S backend/aicoin.S \
                backend/aws.S backend/sigv4.S crypto/sha256.S crypto/hmac.S \
-               net/str.S net/http.S net/server.S app/env.S
+               net/str.S net/http.S net/sock.S net/server.S app/env.S
 BACKEND_OBJ := $(patsubst %.S,$(B)/macho/%.o,$(BACKEND_SRC))
 
 TTY_OBJ    := $(patsubst %.S,$(B)/macho/%.o,app/tty.S $(FONT_SRC))
@@ -77,14 +80,14 @@ QEMU_NET  := -netdev user,id=n0 -device virtio-net-device,netdev=n0
 # A kernel has no environment, so the one thing it must be told arrives through
 # fw_cfg:  make boot KEY=<key>@10.0.2.2:8090
 KEY       ?=
-QEMU_KEY  := $(if $(KEY),-fw_cfg name=opt/sue/key$(,)string=$(KEY),)
+QEMU_KEY  := $(if $(KEY),-fw_cfg name=opt/maos/key$(,)string=$(KEY),)
 
 .PHONY: all tty window kernel kernel-img backend app ios ios-run ios-device agent run win boot boot-tty serve test treefb reboot-path machine network efi-boot efi-run vm disk clean
 all: tty window kernel backend
-tty: $(B)/sue-tty
-window: $(B)/sue-window
+tty: $(B)/maos-tty
+window: $(B)/maos-window
 kernel: $(B)/kernel.elf
-backend: $(B)/sue-server
+backend: $(B)/maos-server
 
 $(B)/macho/%.o: %.S
 	@mkdir -p $(dir $@)
@@ -102,13 +105,13 @@ $(B)/elf/%.o: %.S
 	@mkdir -p $(dir $@)
 	$(AS_ELF) $< -o $@
 
-$(B)/sue-tty: $(TTY_OBJ)
+$(B)/maos-tty: $(TTY_OBJ)
 	$(LD_MACHO) -o $@ $^
 
-$(B)/sue-window: $(WIN_OBJ)
+$(B)/maos-window: $(WIN_OBJ)
 	$(LD_MACHO) -framework AppKit -framework CoreGraphics -o $@ $^
 
-$(B)/sue-server: $(BACKEND_OBJ)
+$(B)/maos-server: $(BACKEND_OBJ)
 	$(LD_MACHO) -o $@ $^
 
 # The flat image every real loader wants. See tools/mkimg.py.
@@ -141,23 +144,23 @@ $(B)/ios/%.o: %.S
 	@mkdir -p $(dir $@)
 	$(CC) $(INC) -target $(IOS_ARCH) -isysroot $(IOS_SDK) -c $< -o $@
 
-ios: $(B)/sue-ios.app
+ios: $(B)/maos-ios.app
 
-$(B)/sue-ios.app: $(IOS_OBJ) app/ios/Info.plist
+$(B)/maos-ios.app: $(IOS_OBJ) app/ios/Info.plist
 	@rm -rf $@ && mkdir -p $@
 	$(CC) -target $(IOS_ARCH) -isysroot $(IOS_SDK) \
 	  -framework UIKit -framework CoreGraphics -framework Foundation \
-	  -o $@/sue $(IOS_OBJ)
+	  -o $@/maos $(IOS_OBJ)
 	@cp app/ios/Info.plist $@/Info.plist
 	@codesign --force --sign - $@ 2>/dev/null || true
 	@echo "built $@"
 
 # Boot a simulator, install, launch.  SIM overrides the device.
 SIM ?= iPhone 17 Pro
-ios-run: $(B)/sue-ios.app
+ios-run: $(B)/maos-ios.app
 	@xcrun simctl boot "$(SIM)" 2>/dev/null || true
-	@xcrun simctl install "$(SIM)" $(B)/sue-ios.app
-	@xcrun simctl launch "$(SIM)" com.oeaio.sue
+	@xcrun simctl install "$(SIM)" $(B)/maos-ios.app
+	@xcrun simctl launch "$(SIM)" com.oeaio.maos
 	@open -a Simulator
 
 # --- iOS, on a real phone ----------------------------------------------
@@ -176,17 +179,17 @@ $(B)/iosdev/%.o: %.S
 	$(CC) $(INC) -target $(IOSDEV_ARCH) -isysroot $(IOSDEV_SDK) -c $< -o $@
 
 ios-device: $(IOSDEV_OBJ) app/ios/Info.plist
-	@rm -rf $(B)/sue-device.app && mkdir -p $(B)/sue-device.app
+	@rm -rf $(B)/maos-device.app && mkdir -p $(B)/maos-device.app
 	$(CC) -target $(IOSDEV_ARCH) -isysroot $(IOSDEV_SDK) \
 	  -framework UIKit -framework CoreGraphics -framework Foundation \
-	  -o $(B)/sue-device.app/sue $(IOSDEV_OBJ)
-	@cp app/ios/Info.plist $(B)/sue-device.app/Info.plist
-	@cp "$(PROFILE)" $(B)/sue-device.app/embedded.mobileprovision
+	  -o $(B)/maos-device.app/maos $(IOSDEV_OBJ)
+	@cp app/ios/Info.plist $(B)/maos-device.app/Info.plist
+	@cp "$(PROFILE)" $(B)/maos-device.app/embedded.mobileprovision
 	@security cms -D -i "$(PROFILE)" | plutil -extract Entitlements xml1 -o $(B)/ent.plist -
-	@plutil -replace application-identifier -string "HTS38ZPRVH.com.oeaio.sue" $(B)/ent.plist
-	@codesign --force --sign "$(SIGN_ID)" --entitlements $(B)/ent.plist --timestamp=none $(B)/sue-device.app
-	@xcrun devicectl device install app --device $(DEVICE) $(B)/sue-device.app
-	@echo "installed on $(DEVICE) - unlock the phone, then tap sue"
+	@plutil -replace application-identifier -string "HTS38ZPRVH.com.oeaio.maos" $(B)/ent.plist
+	@codesign --force --sign "$(SIGN_ID)" --entitlements $(B)/ent.plist --timestamp=none $(B)/maos-device.app
+	@xcrun devicectl device install app --device $(DEVICE) $(B)/maos-device.app
+	@echo "installed on $(DEVICE) - unlock the phone, then tap maos"
 
 # --- the agent ----------------------------------------------------------
 # A machine volunteering itself to an account.  Access is a ceiling, not a
@@ -195,29 +198,29 @@ ACCESS ?= confirmed
 agent:
 	@mkdir -p $(B)/agent
 	javac -d $(B)/agent agent/src/*.java
-	@echo "run: java -cp $(B)/agent SueAgent --key <key> --access $(ACCESS)"
+	@echo "run: java -cp $(B)/agent MaosAgent --key <key> --access $(ACCESS)"
 
 # A double-clickable Mac app: the same binary, in the bundle layout Finder
 # and the Dock expect.
-app: $(B)/sue.app
+app: $(B)/maos.app
 
-$(B)/sue.app: $(B)/sue-window app/macos/Info.plist
+$(B)/maos.app: $(B)/maos-window app/macos/Info.plist
 	@rm -rf $@
 	@mkdir -p $@/Contents/MacOS
 	@cp app/macos/Info.plist $@/Contents/Info.plist
-	@cp $(B)/sue-window $@/Contents/MacOS/sue
+	@cp $(B)/maos-window $@/Contents/MacOS/maos
 	@printf 'APPL????' > $@/Contents/PkgInfo
 	@codesign --force --sign - $@ 2>/dev/null || true
 	@echo "built $@"
 
-run: $(B)/sue-tty
-	@$(B)/sue-tty $(TEXT)
+run: $(B)/maos-tty
+	@$(B)/maos-tty $(TEXT)
 
-win: $(B)/sue-window
-	@$(B)/sue-window $(TEXT)
+win: $(B)/maos-window
+	@$(B)/maos-window $(TEXT)
 
-serve: $(B)/sue-server
-	@$(B)/sue-server
+serve: $(B)/maos-server
+	@$(B)/maos-server
 
 # zoom-to-fit lets the window be dragged to any size: ramfb has one fixed
 # resolution, so the alternative is a window you cannot resize at all.
@@ -239,6 +242,13 @@ boot: $(B)/kernel.elf
 .PHONY: e2e
 e2e: $(B)/kernel.img
 	@python3 tests/e2e.py
+
+# Everything, in the order that finds a problem soonest: the fast assertions
+# first, then the ones that boot a machine. `make test` stays quick enough to
+# run on every save; this is what CI runs and what to run before pushing.
+.PHONY: verify
+verify: test e2e
+	@echo "verified: the pieces, and the machine they make"
 
 # The bare-metal display path: a framebuffer the kernel is given rather than
 # one it asks for. QEMU offers no such thing, so tools/loadertree.py puts the node a
@@ -271,7 +281,7 @@ reboot-path:
 .PHONY: boot-fault
 boot-fault:
 	@$(MAKE) --no-print-directory clean-kernel
-	@$(MAKE) --no-print-directory kernel KERNEL_DEFS=-DSUE_FAULT_TEST
+	@$(MAKE) --no-print-directory kernel KERNEL_DEFS=-DMAOS_FAULT_TEST
 	@echo "--- booting a kernel that faults on purpose:"
 	@$(QEMU) $(QEMU_ARGS) -nographic > $(B)/fault.log 2>&1 & \
 	 P=$$!; sleep 5; kill $$P 2>/dev/null; true
@@ -288,7 +298,7 @@ boot-fault:
 .PHONY: disk
 disk:
 	@$(MAKE) --no-print-directory clean-kernel
-	@$(MAKE) --no-print-directory kernel-img KERNEL_DEFS=-DSUE_DISK_TEST
+	@$(MAKE) --no-print-directory kernel-img KERNEL_DEFS=-DMAOS_DISK_TEST
 	@python3 -c "open('$(B)/disktest.img','wb').truncate(64*1024*1024)"
 	@$(QEMU) -M virt -accel hvf -cpu host -m 512 -kernel $(B)/kernel.img \
 	   -device ramfb -device qemu-xhci -device usb-kbd \
@@ -305,7 +315,7 @@ disk:
 # What the machine says about itself. The first question on any unfamiliar
 # board is whether the addresses came out right, and this is how a kernel with
 # no debugger answers it.
-# sue under macOS's Virtualization framework: a real Apple CPU at EL1,
+# maos under macOS's Virtualization framework: a real Apple CPU at EL1,
 # which is the closest test bed to the eventual bare-metal target. Needs the
 # virtualization entitlement, so it is ad-hoc signed with one.
 $(B)/vzrun: tools/vzrun.swift tools/vz.plist
@@ -319,7 +329,7 @@ vz: $(B)/vzrun $(B)/kernel.img
 # A reference: boot somebody else's kernel under the same host and see whether
 # the framework's console carries anything. It does - which is how we know the
 # silence is ours. Needs a distribution vmlinuz; see tools/refkernel.py.
-# sue as an EFI application, and a disk for the firmware to find it on.
+# maos as an EFI application, and a disk for the firmware to find it on.
 #
 # This is the way into the Virtualization framework: EFI firmware brings up a
 # console and a framebuffer itself and hands them to an application, so a guest
@@ -343,19 +353,19 @@ ACCEL ?= -accel hvf -cpu host
 # Hypervisor.framework, so the instructions execute on this Mac's own cores at
 # EL1 - the same place they will run when it is the only thing on the machine.
 # A USB disk, so the document is still there next time: it is a file here and a
-# partition there, and sue cannot tell the difference.
+# partition there, and maos cannot tell the difference.
 #
 # The disk is made once and then left alone - it is the same one the EFI runs
 # use, made by the rule further down. Deleting it is how you throw the document
 # away; nothing else does.
-SUE_DISK ?= $(B)/sue-disk.img
+MAOS_DISK ?= $(B)/maos-disk.img
 
 .PHONY: vm
-vm: $(B)/kernel.img $(SUE_DISK)
+vm: $(B)/kernel.img $(MAOS_DISK)
 	$(QEMU) -M virt $(ACCEL) -m 512 -kernel $(B)/kernel.img \
 	  -global virtio-mmio.force-legacy=false \
 	  -device ramfb -device qemu-xhci -device usb-kbd \
-	  -drive id=d0,if=none,file=$(SUE_DISK),format=raw,cache=writethrough \
+	  -drive id=d0,if=none,file=$(MAOS_DISK),format=raw,cache=writethrough \
 	  -device usb-storage,drive=d0 \
 	  $(QEMU_NET) $(QEMU_KEY)
 
@@ -379,6 +389,18 @@ $(B)/efi/efidtb.o: $(B)/efidtb.S
 $(B)/BOOTAA64.EFI: $(EFI_OBJ) $(B)/efi/efidtb.o $(B)/kernel.img
 	lld-link -subsystem:efi_application -entry:efi_main -nodefaultlib -out:$@ $(EFI_OBJ) $(B)/efi/efidtb.o
 
+# An image somebody can write to a disk, rather than one to run under
+# something. This is what a release is: GPT, an EFI partition with the loader
+# in the one place firmware looks, and a partition for the document.
+#
+#   make install-image
+#   dd if=build/maos.img of=/dev/rdiskN bs=4m    (the disk, not a partition)
+.PHONY: install-image
+install-image: $(B)/maos.img
+
+$(B)/maos.img: $(B)/BOOTAA64.EFI tools/mkinstall.sh
+	@sh tools/mkinstall.sh $(B)/BOOTAA64.EFI $@ $${IMAGE_MB:-256}
+
 .PHONY: efi
 efi: $(B)/esp.img
 
@@ -401,14 +423,14 @@ $(B)/vzgui: tools/vzgui.swift tools/vz.plist
 efi-boot: $(B)/esp.img
 	@python3 tests/efiboot.py
 
-# sue the way the target will run it: booted from a disk by firmware that
+# maos the way the target will run it: booted from a disk by firmware that
 # owns the machine first, with a keyboard and a network on the USB controller
 # and nothing virtio about it. This is the closest thing to the real machine
 # that can be sat in front of.
 #
 # A disk to keep things on. Made once and kept - the point of it is that what
 # is on it survives, so it is not remade on every run.
-$(B)/sue-disk.img:
+$(B)/maos-disk.img:
 	@mkdir -p $(B)
 	@python3 -c "open('$@','wb').truncate(64*1024*1024)"
 	@echo "made $@, 64MB"
@@ -418,12 +440,12 @@ $(B)/sue-disk.img:
 # for something that is not there - which presents as a machine that boots to
 # a shell for no reason anybody can see.
 .PHONY: efi-run
-efi-run: $(B)/esp.img $(B)/sue-disk.img
+efi-run: $(B)/esp.img $(B)/maos-disk.img
 	@test -f $(EDK2) || (echo "no EFI firmware at $(EDK2)"; exit 1)
 	@cp $(EDK2) $(B)/code.fd
 	@python3 -c "open('$(B)/vars.fd','wb').truncate($$(stat -f%z $(EDK2)))"
-	@echo "--- sue, booted from a disk by firmware, on this machine's own cores"
-	$(QEMU) -M virt $(ACCEL) -m 512 	  -drive if=pflash,format=raw,readonly=on,file=$(B)/code.fd 	  -drive if=pflash,format=raw,file=$(B)/vars.fd 	  -drive format=raw,file=$(B)/esp.img,if=virtio 	  -device ramfb -device qemu-xhci -device usb-kbd 	  -drive id=disk0,if=none,file=$(B)/sue-disk.img,format=raw 	  -device usb-storage,drive=disk0 	  -netdev user,id=u0 -device usb-net,netdev=u0 	  -display cocoa,zoom-to-fit=on,left-command-key=on
+	@echo "--- maos, booted from a disk by firmware, on this machine's own cores"
+	$(QEMU) -M virt $(ACCEL) -m 512 	  -drive if=pflash,format=raw,readonly=on,file=$(B)/code.fd 	  -drive if=pflash,format=raw,file=$(B)/vars.fd 	  -drive format=raw,file=$(B)/esp.img,if=virtio 	  -device ramfb -device qemu-xhci -device usb-kbd 	  -drive id=disk0,if=none,file=$(B)/maos-disk.img,format=raw 	  -device usb-storage,drive=disk0 	  -netdev user,id=u0 -device usb-net,netdev=u0 	  $(QEMU_KEY) 	  -display cocoa,zoom-to-fit=on,left-command-key=on
 
 .PHONY: vz-efi
 vz-efi: $(B)/vzgui $(B)/esp.img
@@ -440,7 +462,7 @@ vz-reference: $(B)/vzrun
 .PHONY: boot-dtb
 boot-dtb:
 	@$(MAKE) --no-print-directory clean-kernel
-	@$(MAKE) --no-print-directory kernel KERNEL_DEFS=-DSUE_DTB_DUMP
+	@$(MAKE) --no-print-directory kernel KERNEL_DEFS=-DMAOS_DTB_DUMP
 	@$(QEMU) $(QEMU_ARGS) $(QEMU_KBD) $(QEMU_NET) -nographic > $(B)/dtb.log 2>&1 & \
 	 P=$$!; sleep 5; kill $$P 2>/dev/null; true
 	@sed -n '1,10p' $(B)/dtb.log
@@ -515,6 +537,34 @@ STORE_OBJ := $(B)/macho/tests/storetest.o $(B)/macho/kernel/store.o \
              $(B)/macho/gfx/video.o $(B)/macho/net/str.o $(B)/macho/font/font.o \
              $(B)/macho/font/render.o
 
+# The key schedule has no I/O in it, so its test links the arithmetic and
+# nothing else - which is also the argument for the file existing: TLS is two
+# problems and this is the one that can be settled without a network.
+TLS_OBJ := $(B)/macho/tests/tlstest.o $(B)/macho/crypto/tls13.o \
+           $(B)/macho/crypto/hkdf.o $(B)/macho/crypto/hmac.o \
+           $(B)/macho/crypto/sha256.o
+
+$(B)/tlstest: $(TLS_OBJ)
+	$(LD_MACHO) -o $@ $(TLS_OBJ)
+
+# The record layer, which needs the cipher under it and nothing above it.
+TLSREC_OBJ := $(B)/macho/tests/tlsrectest.o $(B)/macho/net/tlsrec.o \
+              $(B)/macho/crypto/aead.o $(B)/macho/crypto/chacha20.o \
+              $(B)/macho/crypto/poly1305.o $(B)/macho/crypto/sha256.o
+
+$(B)/tlsrectest: $(TLSREC_OBJ)
+	$(LD_MACHO) -o $@ $(TLSREC_OBJ)
+
+# The journal lives in the editor core, so this links the editor and the string
+# helpers it writes through, and nothing that knows what a network is.
+JOURNAL_OBJ := $(B)/macho/tests/journaltest.o $(B)/macho/editor/editor.o \
+               $(B)/macho/editor/applet.o $(B)/macho/gfx/image.o \
+               $(B)/macho/gfx/video.o $(B)/macho/net/str.o \
+               $(B)/macho/font/font.o $(B)/macho/font/render.o
+
+$(B)/journaltest: $(JOURNAL_OBJ)
+	$(LD_MACHO) -o $@ $(JOURNAL_OBJ)
+
 $(B)/storetest: $(STORE_OBJ)
 	$(LD_MACHO) -o $@ $(STORE_OBJ)
 
@@ -525,15 +575,24 @@ $(B)/browsetest: $(BROWSE_OBJ)
 	$(LD_MACHO) -o $@ $(BROWSE_OBJ)
 
 .PHONY: test
-test: $(B)/optest $(B)/localtest $(B)/bootargstest $(B)/storetest
+test: $(B)/optest $(B)/localtest $(B)/bootargstest $(B)/storetest $(B)/tlstest \
+      $(B)/tlsrectest $(B)/journaltest
+	@echo "  --- and the OS behaviour, from the suite a port inherits:"
+	@cd tests/os && cargo test --quiet 2>&1 | grep -E "^test result" \
+	  | awk '{ p += $$4; f += $$6 } END { printf "    %d assertions about the OS, %d failed  %s\n", \
+	      p, f, (f == 0 ? "ok" : "FAIL") }'
+	@cd tests/os && cargo test --quiet >/dev/null 2>&1 \
+	  || (echo "    the Rust suite disagrees                          FAIL"; exit 1)
+	@echo "  --- and the backend, with the coverage floor the build enforces:"
+	@cd backend-java && ./gradlew -q check coverage
 	@cd backend-java && ./gradlew -q installDist
 	@javac -cp backend-java/build/classes/java/main -d $(B)/tests \
 	   tests/ColourTest.java tests/ConsortiumTest.java tests/WaitingTest.java tests/QrTest.java
-	@java -cp "backend-java/build/classes/java/main:$(shell ls backend-java/build/install/sue-server/lib/*.jar | tr '\n' ':')$(B)/tests" \
+	@java -cp "backend-java/build/classes/java/main:$(shell ls backend-java/build/install/maos-server/lib/*.jar | tr '\n' ':')$(B)/tests" \
 	   ColourTest $(B)/tests/colour.bin $(B)/tests/shout.bin
-	@java -cp "backend-java/build/classes/java/main:$(shell ls backend-java/build/install/sue-server/lib/*.jar | tr '\n' ':')$(B)/tests" \
+	@java -cp "backend-java/build/classes/java/main:$(shell ls backend-java/build/install/maos-server/lib/*.jar | tr '\n' ':')$(B)/tests" \
 	   ConsortiumTest
-	@java -cp "backend-java/build/classes/java/main:$(shell ls backend-java/build/install/sue-server/lib/*.jar | tr '\n' ':')$(B)/tests" \
+	@java -cp "backend-java/build/classes/java/main:$(shell ls backend-java/build/install/maos-server/lib/*.jar | tr '\n' ':')$(B)/tests" \
 	   WaitingTest
 	@java -cp "backend-java/build/classes/java/main:$(B)/tests" QrTest $(B)/qrgrid.txt
 	@echo "  --- and the code, read back by the framework a camera uses:"
@@ -544,24 +603,57 @@ test: $(B)/optest $(B)/localtest $(B)/bootargstest $(B)/storetest
 	@echo "  --- and the aarch64 it emitted, executed:"
 	@for c in blue red green chartreuse; do \
 	   printf "    set-colour %-11s -> [%s]\n" "$$c" \
-	     "$$(SUE_TAG=1 $(B)/optest $(B)/tests/colour.bin "$$c" "a document" "" "")"; \
+	     "$$(MAOS_TAG=1 $(B)/optest $(B)/tests/colour.bin "$$c" "a document" "" "")"; \
 	 done
 	@printf "    shout %-17s -> [%s]\n" "(screen only)" \
-	   "$$(SUE_TAG=1 $(B)/optest $(B)/tests/shout.bin "hello" "" "")"
+	   "$$(MAOS_TAG=1 $(B)/optest $(B)/tests/shout.bin "hello" "" "")"
+	@echo "  --- and the TLS 1.3 key schedule, against RFC 8448's own trace:"
+	@printf '%s\n' \
+	  33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a \
+	  1dc826e93606aa6fdc0aadc12f741b01046aa6b99f691ed221a9f0ca043fbeac \
+	  b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21 \
+	  b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38 \
+	  18df06843d13a08bf2a449844c5f8a478001bc4d4c627984d5a41da8d0402919 \
+	  3fce516009c21727d0f2e4e86ee403bc \
+	  5d313eb2671276ee13000b30 > $(B)/tls.expected
+	@$(B)/tlstest > $(B)/tls.actual
+	@diff -q $(B)/tls.expected $(B)/tls.actual >/dev/null \
+	  && echo "    early, handshake, both traffic secrets, master, key, iv  ok" \
+	  || (echo "    the schedule disagrees with the published trace    FAIL"; \
+	      diff $(B)/tls.expected $(B)/tls.actual; exit 1)
+	@echo "  --- and what the person did, which the screen cannot show:"
+	@printf '%s\n' "ins 0 hi" "del 1 1" "ins 0 x" "drained" > $(B)/journal.expected
+	@$(B)/journaltest > $(B)/journal.actual
+	@diff -q $(B)/journal.expected $(B)/journal.actual >/dev/null \
+	  && echo "    a run of typing is one entry, and reading it empties it  ok" \
+	  || (echo "    the journal disagrees                             FAIL"; \
+	      diff $(B)/journal.expected $(B)/journal.actual; exit 1)
+	@echo "  --- and the records those keys protect:"
+	@printf '%s\n' \
+	  1703030020903110ed1d6a887337a2d66dda801eda32b5c4b7c02e6afe2a4b130202963590 \
+	  1703030024ca13da15c84859c77155f50e038a48386b2c26c7fbfb927218505694f475533780591c52 \
+	  68656c6c6f2066726f6d206d616f73 \
+	  17 \
+	  refused > $(B)/tlsrec.expected
+	@$(B)/tlsrectest > $(B)/tlsrec.actual
+	@diff -q $(B)/tlsrec.expected $(B)/tlsrec.actual >/dev/null \
+	  && echo "    sealed, counted, opened, and one altered byte refused  ok" \
+	  || (echo "    the record layer disagrees                        FAIL"; \
+	      diff $(B)/tlsrec.expected $(B)/tlsrec.actual; exit 1)
 	@echo "  --- and what m1n1 would hand over on a real machine:"
 	@$(B)/bootargstest
 	@echo "  --- and the same operation in a build going to the shop:"
 	@$(MAKE) --no-print-directory $(B)/store/optest APP_STORE=1 B=$(B)/store >/dev/null
-	@test -z "$$(SUE_TAG=1 $(B)/store/optest $(B)/tests/colour.bin blue "a document" "" "" 2>&1)" \
+	@test -z "$$(MAOS_TAG=1 $(B)/store/optest $(B)/tests/colour.bin blue "a document" "" "" 2>&1)" \
 	  && echo "    code from the server does not run there            ok" \
 	  || (echo "    code from the server does not run there            FAIL"; exit 1)
 	@echo "  --- the document, kept and found again:"
 	@mkdir -p $(B)/storehome $(B)/storehome-stranger
-	@rm -f $(B)/storehome/.sue-document
-	@printf 'somebody else, photographs and notes' > $(B)/storehome-stranger/.sue-document
+	@rm -f $(B)/storehome/.maos-document
+	@printf 'somebody else, photographs and notes' > $(B)/storehome-stranger/.maos-document
 	@HOME=$(B)/storehome $(B)/storetest
 	@HOME=$(B)/storehome-stranger $(B)/storetest stranger
-	@python3 -c "import sys; d=open('$(B)/storehome/.sue-document','rb').read(); \
+	@python3 -c "import sys; d=open('$(B)/storehome/.maos-document','rb').read(); \
 	  ok = d[:8]==b'SUEDISK1' and int.from_bytes(d[8:12],'little')==43 \
 	       and d[512:555]==b'the same document, whichever way it started'; \
 	  print('  the file the app wrote is the disk the machine reads    ' + ('ok' if ok else 'FAIL')); \

@@ -6,7 +6,7 @@
 build/
 app/tty
 app/window
-backend/sue-server
+backend/maos-server
 
 # secrets - never commit credentials of any kind
 *.token
@@ -39,3 +39,6 @@ __pycache__/
 
 # The waiting list is a server's own state, not the project's.
 waiting/
+
+# The Rust OS suite's build output.
+tests/os/target/

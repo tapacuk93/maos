@@ -1,0 +1,23 @@
+# The OS's behaviour, written down where a port can reuse it.
+#
+# maos is aarch64 assembly today and is meant not to be only that. Everything
+# asserted here is a property of the operating system rather than of the
+# instruction set: that a run of typing is one journal entry, that a record
+# with an altered byte does not open, that the key schedule produces the values
+# RFC 8448 publishes. None of those sentences mentions a register.
+#
+# So the suite is Rust and the subject is the real assembled code, reached
+# through the C ABI, which every architecture this could be ported to already
+# has. Porting means pointing build.rs at the new sources. It does not mean
+# rewriting a single assertion - and if an assertion here fails on a new
+# architecture, that is the port being wrong rather than the test needing
+# adjustment, which is the whole value of having written them down.
+[package]
+name = "maos-os-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "maos"
+path = "src/lib.rs"

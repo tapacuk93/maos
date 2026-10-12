@@ -1,0 +1,77 @@
+# What has to be true before anything is merged.
+#
+# One job, because the suite is one command and splitting it would buy
+# parallelism in exchange for a matrix of caches to keep warm. It runs on an
+# arm64 runner for the reason the whole project exists: this is aarch64
+# assembly, and a build that cross-assembles without ever executing an
+# instruction would prove the assembler works and nothing else.
+name: build
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first one's answer worthless.
+#
+# Without this, pushing three times in a minute runs three builds, two of which
+# are about code nobody has any more, and the useful one queues behind them.
+# The group is per branch and per workflow, so a run on main is never cancelled
+# by a run on somebody's branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: graalvm
+          java-version: '25'
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('backend-java/*.gradle') }}
+          restore-keys: gradle-
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # The hosted builds are Mach-O and the kernel is ELF, and only one of
+      # those can be linked here. So: assemble everything, link what links on
+      # Linux, and run the tests that do not need a Mac to exist.
+      - name: The kernel, assembled and linked
+        run: make kernel
+
+      - name: The backend, with its coverage floor
+        run: cd backend-java && ./gradlew --no-daemon check coverage
+
+      - name: The OS behaviour, from the Rust suite
+        run: cd tests/os && cargo test --no-fail-fast
+
+      # Not a formality: the thing this project is for is a machine that boots,
+      # and a kernel that no longer links is a thing nobody can boot.
+      - name: The image a loader would be handed
+        run: make build/kernel.img
+
+      # And then boot it. No Hypervisor.framework here, so these run under
+      # emulation and take minutes rather than seconds - which is the right
+      # trade for the only test that answers "does the thing still work".
+      # The cases needing a backend skip themselves and say so.
+      - name: QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+
+      - name: The machine, end to end
+        run: make e2e

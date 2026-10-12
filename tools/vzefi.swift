@@ -1,4 +1,4 @@
-// vzefi - boot sue under the Virtualization framework through EFI.
+// vzefi - boot maos under the Virtualization framework through EFI.
 //
 // The other host program, tools/vzrun.swift, uses the Linux boot loader: it
 // hands the guest a raw arm64 image and a device tree and gets out of the way.
@@ -38,7 +38,7 @@ let boot = VZEFIBootLoader()
 // each run: this is a test bed, and a boot order remembered from a previous
 // experiment is a variable nobody meant to set.
 let varsURL = URL(fileURLWithPath: NSTemporaryDirectory())
-    .appendingPathComponent("sue-efivars")
+    .appendingPathComponent("maos-efivars")
 try? FileManager.default.removeItem(at: varsURL)
 do {
     boot.variableStore = try VZEFIVariableStore(creatingVariableStoreAt: varsURL)

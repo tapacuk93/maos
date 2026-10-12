@@ -26,7 +26,7 @@ let disk = URL(fileURLWithPath: args[1])
 
 let boot = VZEFIBootLoader()
 let varsURL = URL(fileURLWithPath: NSTemporaryDirectory())
-    .appendingPathComponent("sue-efivars-gui")
+    .appendingPathComponent("maos-efivars-gui")
 try? FileManager.default.removeItem(at: varsURL)
 do {
     boot.variableStore = try VZEFIVariableStore(creatingVariableStoreAt: varsURL)
@@ -83,7 +83,7 @@ final class App: NSObject, NSApplicationDelegate, VZVirtualMachineDelegate {
         window = NSWindow(contentRect: view.frame,
                           styleMask: [.titled, .closable, .resizable],
                           backing: .buffered, defer: false)
-        window.title = "sue (EFI)"
+        window.title = "maos (EFI)"
         window.contentView = view
         window.center()
         window.makeKeyAndOrderFront(nil)

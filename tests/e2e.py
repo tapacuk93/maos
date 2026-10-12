@@ -3,7 +3,7 @@
 End to end, in a virtual machine, on the features as somebody would use them.
 
 Every other test here checks a piece: that an operation compiles, that a
-directive parses, that the emitted aarch64 runs. This one boots sue as its
+directive parses, that the emitted aarch64 runs. This one boots maos as its
 own operating system, types at it, and looks at the screen - which is the only
 way to find out whether the pieces are still connected to each other.
 
@@ -34,7 +34,16 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 BUILD = os.path.join(ROOT, "build")
-SCRATCH = os.environ.get("E2E_DIR", "/tmp/sue-e2e")
+SCRATCH = os.environ.get("E2E_DIR", "/tmp/maos-e2e")
+
+# Whether to put the machines on screen while they are being driven.
+#
+# Off by default, because this runs in CI and on machines nobody is sitting at,
+# and a test that needs a window is a test that cannot run there. On with
+# E2E_SHOW=1, which changes nothing about what is asserted: the keys still go
+# through the monitor rather than the window, and the screen is still read from
+# a framebuffer dump. The only difference is that somebody can watch.
+SHOW = os.environ.get("E2E_SHOW", "").strip() not in ("", "0", "no")
 
 # The palette the editor draws with, straight out of editor.S. Only the two
 # this test can ask for; the caret's amber is deliberately absent, because it
@@ -43,6 +52,11 @@ GREEN, BLUE = "green", "blue"
 PALETTE = {GREEN: (0x8A, 0xE2, 0xB8), BLUE: (0x8A, 0xB8, 0xE2)}
 
 failures = []
+
+
+def announce(name, why):
+    if SHOW:
+        print("\n  [ %s ] %s" % (name, why), flush=True)
 
 
 def ok(passed, what, detail=""):
@@ -57,10 +71,11 @@ def skip(what, why):
 
 
 class Machine:
-    """One booted sue, driven through QEMU's monitor."""
+    """One booted maos, driven through QEMU's monitor."""
 
-    def __init__(self, name, key=None, network=True, graphics=True):
+    def __init__(self, name, key=None, network=True, graphics=True, wait_for=b"maos:"):
         self.name = name
+        self.wait_for = wait_for
         self.serial = os.path.join(SCRATCH, name + ".log")
         self.port = 4600 + (abs(hash(name)) % 300)
         argv = [
@@ -75,14 +90,18 @@ class Machine:
             argv += ["-netdev", "user,id=n0",
                      "-device", "virtio-net-device,netdev=n0"]
         if key:
-            argv += ["-fw_cfg", "name=opt/sue/key,string=" + key]
-        argv += ["-device", "ramfb", "-display", "none"] if graphics else ["-display", "none"]
+            argv += ["-fw_cfg", "name=opt/maos/key,string=" + key]
+        if graphics:
+            argv += ["-device", "ramfb"]
+        argv += (["-display", "cocoa,zoom-to-fit=on,left-command-key=on"] if SHOW and graphics
+                 else ["-display", "none"])
         self.argv = argv
         self.proc = None
 
     def __enter__(self):
         if os.path.exists(self.serial):
             os.remove(self.serial)
+        announce(self.name, "booting")
         self.proc = subprocess.Popen(self.argv, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
         # Wait for the machine to say it is up rather than sleeping a guess:
@@ -91,7 +110,7 @@ class Machine:
         for _ in range(200):
             if os.path.exists(self.serial):
                 with open(self.serial, "rb") as f:
-                    if b"sue:" in f.read():
+                    if self.wait_for in f.read():
                         break
             time.sleep(0.1)
         time.sleep(1.0)
@@ -99,6 +118,9 @@ class Machine:
         time.sleep(0.3)
         self.mon.recv(65536)
         return self
+
+    def log_has(self, text):
+        return text in self.log()
 
     def __exit__(self, *rest):
         try:
@@ -128,7 +150,7 @@ class Machine:
 
         QEMU's sendkey delivers a press and a release as one event pair, and
         driving it faster than the guest drains its keyboard ring produces
-        transpositions - "sue running as its own operating system" came out
+        transpositions - "maos running as its own operating system" came out
         as "Jsredt rucnniong las oitrs oswn". That is the harness outrunning the
         machine, not the machine dropping keys, and it makes every text
         assertion downstream meaningless.
@@ -161,7 +183,7 @@ class Machine:
         return self.log().count("KERNEL FAULT")
 
     def boots(self):
-        return self.log().count("sue: boot")
+        return self.log().count("maos: boot")
 
 
 def read_ppm(path):
@@ -241,15 +263,40 @@ def rows_with_text(shot):
 
 # ---------------------------------------------------------------- the tests
 
+# A key that is syntactically a key and reaches nothing. The editor checks that
+# it has an identity, never that the identity can be reached - see
+# backend_have_key - so this is exactly the machine somebody has on a train.
+NO_BACKEND_KEY = "0" * 48
+
+
+def test_no_key_no_editor():
+    """
+    A machine nobody has claimed does not open an editor.
+
+    The key is what makes a machine somebody's: it is issued only after a
+    wallet and cloud access were used, so one that holds a key can do
+    everything this program is for the moment it can reach anything. Opening
+    without one hands somebody a text editor that can do none of it, and lets
+    them get far enough into a document to mind.
+    """
+    with Machine("nokey", network=False, wait_for=b"nobody's yet") as m:
+        log = m.log()
+        ok("nobody's yet" in log, "a machine with no key says so and stops")
+        ok("maos: boot" in log, "...having got far enough to say it")
+        ok(m.faults() == 0, "...without faulting")
+
+
 def test_offline_colour():
     """
     "colours blue" with no network device at all.
 
     The strongest claim this project makes: an operation that enough people
     asked for, that compiled, and that several models agreed to ship, is in the
-    binary and needs nobody's permission to run. No netdev, no key, no backend.
+    binary and needs nobody's permission to run. No netdev, no backend - and a
+    key, because the key says whose machine this is rather than whether it has
+    a network, and this machine has one of those and not the other.
     """
-    with Machine("offline", network=False) as m:
+    with Machine("offline", network=False, key=NO_BACKEND_KEY) as m:
         # Something to look at first. Booted as an operating system the editor
         # starts with an empty buffer - the greeting belongs to the macOS
         # window build - so there is no text to have a colour until there is.
@@ -359,13 +406,14 @@ def test_typing_through_a_request(key):
 
 def main():
     os.makedirs(SCRATCH, exist_ok=True)
-    key = os.environ.get("SUE_KEY", "").strip()
+    key = os.environ.get("MAOS_KEY", "").strip()
     if key and "@" not in key:
-        backend = os.environ.get("SUE_BACKEND", "10.0.2.2:8090")
+        backend = os.environ.get("MAOS_BACKEND", "10.0.2.2:8090")
         key = key + "@" + backend
     daemon_log = os.environ.get("E2E_DAEMON_LOG", "")
 
-    print("sue, end to end, in a virtual machine")
+    print("maos, end to end, in a virtual machine")
+    test_no_key_no_editor()
     test_offline_colour()
     test_reboot(key)
     test_browse(key, daemon_log)

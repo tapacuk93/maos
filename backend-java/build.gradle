@@ -1,5 +1,6 @@
 plugins {
     id 'application'
+    id 'jacoco'
     id 'org.graalvm.buildtools.native' version '0.10.3'
 }
 
@@ -22,6 +23,9 @@ ext {
 
 dependencies {
     implementation "io.netty:netty-all:${nettyVersion}"
+    testImplementation platform('org.junit:junit-bom:5.11.3')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 // Sources stay where they are rather than being shuffled into
@@ -32,10 +36,106 @@ sourceSets {
             srcDirs = ['src']
         }
     }
+    test {
+        java {
+            srcDirs = ['test']
+        }
+    }
+}
+
+/*
+ * What is covered, and what is honestly not coverable here.
+ *
+ * The excluded classes are the ones whose body is a conversation with somebody
+ * else's machine: signing and sending to EC2, opening a socket to the proxy,
+ * Netty's transport. A test that covered those would be a test of a mock, and
+ * a number that counted them would say this code is tested when what is tested
+ * is a fiction about AWS. They are left out of the measurement rather than
+ * faked into it, so the percentage below means what it says.
+ */
+test {
+    useJUnitPlatform()
+    testLogging {
+        events 'failed'
+        exceptionFormat 'full'
+    }
+    finalizedBy jacocoTestReport
+}
+
+/*
+ * The floor, which only ever moves up.
+ *
+ * A coverage number that is reported and not enforced is a number that drifts
+ * down one merge at a time, and nobody notices because nobody is looking at a
+ * report. This fails the build instead. It is deliberately set just under what
+ * the suite currently reaches: the point is to stop ground being lost, not to
+ * assert a number somebody picked. Raise it whenever the real figure clears it
+ * by a margin - that is the ratchet, and it is meant to be turned by hand so
+ * that raising it is a decision rather than an accident.
+ */
+ext.coverageFloor = 0.33
+
+jacocoTestCoverageVerification {
+    dependsOn jacocoTestReport
+    violationRules {
+        rule {
+            limit {
+                counter = 'INSTRUCTION'
+                value = 'COVEREDRATIO'
+                minimum = coverageFloor
+            }
+        }
+    }
+    afterEvaluate {
+        classDirectories.setFrom(jacocoTestReport.classDirectories)
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification
+
+/* What the number actually is, printed where somebody will see it. */
+tasks.register('coverage') {
+    dependsOn jacocoTestReport
+    doLast {
+        def report = file("${buildDir}/reports/jacoco/test/jacocoTestReport.xml")
+        if (!report.exists()) {
+            throw new GradleException("no coverage report at ${report}")
+        }
+        def parser = new groovy.xml.XmlParser(false, false)
+        parser.setFeature('http://apache.org/xml/features/disallow-doctype-decl', false)
+        parser.setFeature('http://apache.org/xml/features/nonvalidating/load-external-dtd', false)
+        def root = parser.parse(report)
+        def counter = root.counter.find { it.@type == 'INSTRUCTION' }
+        def covered = counter.@covered.toInteger()
+        def missed = counter.@missed.toInteger()
+        def pct = 100.0 * covered / (covered + missed)
+        println String.format(java.util.Locale.ROOT,
+                "    instructions covered: %d of %d  %.1f%%  (floor %.0f%%)",
+                covered, covered + missed, pct, coverageFloor * 100)
+    }
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+    afterEvaluate {
+        classDirectories.setFrom(files(classDirectories.files.collect {
+            fileTree(dir: it, exclude: [
+                'Aws*.class',
+                'Provisioners*.class',
+                'Fetch*.class',
+                'Catalogue*.class',
+                'MaosServer$*.class',
+            ])
+        }))
+    }
 }
 
 application {
-    mainClass = 'SueServer'
+    mainClass = 'MaosServer'
 }
 
 run {
@@ -54,8 +154,8 @@ graalvmNative {
     }
     binaries {
         main {
-            imageName = 'sue-server'
-            mainClass = 'SueServer'
+            imageName = 'maos-server'
+            mainClass = 'MaosServer'
             // No fallback image: a "native" build that silently ships a JVM
             // would defeat the point, so fail loudly instead.
             buildArgs.add('--no-fallback')
