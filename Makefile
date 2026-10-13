@@ -14,7 +14,9 @@
 
 SDK      := $(shell xcrun -sdk macosx --show-sdk-path)
 CC       := clang
-INC      := -Iinclude
+# build/ as well as include/, for the one header the build generates: the key
+# an image is built with. See the bakedkey rule.
+INC      := -Iinclude -Ibuild
 # Set APP_STORE=1 for a build that is going to the shop. It closes the one
 # door that cannot be defended on somebody else's behalf: running machine code
 # the backend sent. See the note at op_install in app/ops.S.
@@ -322,6 +324,22 @@ $(B)/vzrun: tools/vzrun.swift tools/vz.plist
 	swiftc -O -o $@ tools/vzrun.swift
 	@codesign --entitlements tools/vz.plist -s - $@
 
+# The key this image is built with, if any.
+#
+# Regenerated whenever KEY changes, which is what makes `make vz KEY=...`
+# produce an image that knows whose it is. Not committed and not in a header
+# anybody edits: it is a build input, like the AMI or the backend address.
+$(B)/bakedkey.inc: FORCE
+	@mkdir -p $(B)
+	@printf '        .asciz "%s"\n' '$(KEY)' > $@.new
+	@cmp -s $@.new $@ || mv $@.new $@
+	@rm -f $@.new
+
+.PHONY: FORCE
+FORCE:
+
+$(B)/elf/kernel/main.o: $(B)/bakedkey.inc
+
 .PHONY: vz
 vz: $(B)/vzrun $(B)/kernel.img
 	VZRUN_SECONDS=$${VZRUN_SECONDS:-10} $(B)/vzrun $(B)/kernel.img
@@ -449,6 +467,36 @@ efi-run: $(B)/esp.img $(B)/maos-disk.img
 
 .PHONY: vz-efi
 vz-efi: $(B)/vzgui $(B)/esp.img
+	$(B)/vzgui $(B)/esp.img
+
+# maos under Apple's own hypervisor, with a network and a backend.
+#
+# This is the one to run on a Mac. The Virtualization framework executes the
+# guest on this machine's own cores, hands it a NAT network with the host on
+# the other end, and gives it a USB keyboard - which is the same shape the
+# guest will meet on real hardware, so the drivers it exercises are the ones it
+# will use.
+#
+# It always starts connected, because a machine that boots without a key is a
+# machine that refuses to open, and one without a network is one whose two most
+# useful keys do nothing. The key is baked into the image; the address in it is
+# where the guest can reach this host, which under NAT is not localhost.
+#
+#     make maos KEY=<key>
+#
+# The backend has to be listening on an address the guest can route to, which
+# means not 127.0.0.1. MAOS_HOST is that address, found below unless given.
+MAOS_HOST ?= $(shell ipconfig getifaddr en0 2>/dev/null ||                      ipconfig getifaddr en1 2>/dev/null || echo 192.168.64.1)
+MAOS_PORT ?= 8090
+
+.PHONY: maos
+maos:
+	@test -n "$(KEY)" || (echo "give it a key: make maos KEY=<the key your backend issued>"; exit 1)
+	@echo "--- building an image that knows it is yours"
+	@$(MAKE) --no-print-directory $(B)/esp.img KEY='$(KEY)@$(MAOS_HOST):$(MAOS_PORT)'
+	@echo "--- checking the backend answers where the guest will look"
+	@curl -sf -m 3 http://$(MAOS_HOST):$(MAOS_PORT)/api/health >/dev/null 	  && echo "    backend at $(MAOS_HOST):$(MAOS_PORT)  ok" 	  || (echo "    nothing at $(MAOS_HOST):$(MAOS_PORT) - start the backend bound to 0.0.0.0 first:"; 	      echo "    cd backend-java && MAOS_PORT=$(MAOS_PORT) ./build/install/maos-server/bin/maos-server"; 	      exit 1)
+	@$(MAKE) --no-print-directory $(B)/vzgui
 	$(B)/vzgui $(B)/esp.img
 
 .PHONY: vz-reference

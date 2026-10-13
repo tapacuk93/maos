@@ -679,7 +679,28 @@ kmain:
         LEA     x0, m_key
         bl      platform_puts
         b       5f
-2:      LEA     x0, m_nokey
+/*
+ * And if the firmware had none, whatever this image was built with.
+ *
+ * fw_cfg is QEMU's and nothing else has it: booted by EFI firmware, or by
+ * Apple's Virtualization framework, or by m1n1 on the machine this is aimed
+ * at, there is no channel for a key at all. An image built for somebody's own
+ * machine can carry theirs - which is what it means for a disk to be theirs -
+ * and `make KEY=...` is how it gets in.
+ *
+ * Empty unless somebody asked for it, so an image built without a key behaves
+ * as it always did and says so.
+ */
+2:      LEA     x9, baked_key
+        ldrb    w10, [x9]
+        cbz     w10, 6f
+        LEA     x0, s_keyname
+        LEA     x1, baked_key
+        bl      SYM(env_put)
+        LEA     x0, m_bakedkey
+        bl      platform_puts
+        b       5f
+6:      LEA     x0, m_nokey
         bl      platform_puts
 5:
 /*
@@ -888,5 +909,15 @@ m_key:    .asciz "maos: backend key accepted\n"
 m_nokey:  .asciz "maos: no key in fw_cfg\n"
 s_keyfile: .asciz "opt/maos/key"
 s_keyname: .asciz "MAOS_KEY"
+m_bakedkey: .asciz "maos: using the key this image was built with\n"
+/*
+ * The key this image was built with, or nothing.
+ *
+ * Generated: see the bakedkey rule in the Makefile. It is a build input rather
+ * than a secret kept here - the file is not committed, and an image carrying
+ * one is an image somebody made for their own machine.
+ */
+baked_key:
+#include "bakedkey.inc"
 m_nofb:   .asciz "maos: no framebuffer on this machine, serial only\n"
 m_keys:   .asciz "maos: type in the display window, or here if this machine has no\n  keyboard. Use Ctrl for Cmd - macOS keeps the real Command key for\n  itself before QEMU ever sees it.\n  Ctrl+T new screen   Ctrl+left/right switch   Ctrl+H close\n  Ctrl+P rewrite      Ctrl+J hand over         Ctrl+0..9 colour\n"

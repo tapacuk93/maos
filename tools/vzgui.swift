@@ -51,6 +51,27 @@ graphics.scanouts = [VZVirtioGraphicsScanoutConfiguration(widthInPixels: 1280,
                                                           heightInPixels: 800)]
 config.graphicsDevices = [graphics]
 
+/*
+ * A network, always.
+ *
+ * This machine is not useful without one: it holds a key, and a key is a thing
+ * to reach a backend with. The framework's NAT hands out an address over DHCP
+ * and puts the host on the other end of it, which is the same shape the guest
+ * sees under QEMU - so the kernel's own DHCP, ARP and TCP take the path they
+ * already take and nothing in the guest knows which hypervisor this is.
+ */
+let net = VZVirtioNetworkDeviceConfiguration()
+net.attachment = VZNATNetworkDeviceAttachment()
+config.networkDevices = [net]
+
+/*
+ * And a keyboard, for the same reason: a window that cannot be typed into is a
+ * screenshot. USB rather than the Mac-only one, because the guest's driver is
+ * the USB HID path it will use on real hardware.
+ */
+config.keyboards = [VZUSBKeyboardConfiguration()]
+config.pointingDevices = [VZUSBScreenCoordinatePointingDeviceConfiguration()]
+
 let console = VZVirtioConsoleDeviceSerialPortConfiguration()
 if let path = ProcessInfo.processInfo.environment["VZEFI_OUT"] {
     FileManager.default.createFile(atPath: path, contents: nil)
