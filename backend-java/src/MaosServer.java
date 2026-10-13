@@ -71,6 +71,7 @@ public final class MaosServer {
     private final Preflight preflight;
     private final Workers workers;
     private final Contexts contexts;
+    private final Workshop workshop;
     private final Consensus consensus = new Consensus();
     private final Behaviours behaviours;
     private final Catalogue catalogue;
@@ -110,6 +111,19 @@ public final class MaosServer {
                 java.nio.file.Path.of(env("MAOS_CONTEXT_DIR", "../.maos-contexts")),
                 Long.parseLong(env("MAOS_CONTEXT_SECONDS", "3600")));
         this.preflight = new Preflight(aicoin, source, contexts);
+        /*
+         * Changing the machine, in the asker's own tree.
+         *
+         * The build is the gate and the branch is the boundary. MAOS_BUILD is
+         * what has to pass before anything is committed, so a deployment that
+         * wants a narrower or wider gate moves it here rather than in the code
+         * - and MAOS_BUILD_PUSH=0 stops at the commit for anybody who would
+         * rather look at a branch before it leaves the machine.
+         */
+        this.workshop = new Workshop(source,
+                env("MAOS_BUILD", "make all test"),
+                Long.parseLong(env("MAOS_BUILD_SECONDS", "900")),
+                !"0".equals(env("MAOS_BUILD_PUSH", "1")));
         this.aws = new Aws(
                 env("MAOS_AWS_ADDR", ""),
                 env("MAOS_AMI", ""),
@@ -1346,6 +1360,15 @@ public final class MaosServer {
  * become a mechanism for sending nothing.
  */
         var needs = Preflight.Needs.undecided();
+        /*
+         * Whether any source was actually put in front of the model.
+         *
+         * Not the same as having asked for some. A model that is told it may
+         * write the sources back, having been shown none, writes one from
+         * memory - and a file written from memory compiles about as often as a
+         * quotation remembered from a book is word for word.
+         */
+        boolean gatheredSource = false;
 /*
  * And whatever answering this needs to have read.
  *
@@ -1365,6 +1388,7 @@ public final class MaosServer {
                     workers.forAccount(account.id()));
             prompt.append(gathered.text());
             needs = gathered.needs();
+            gatheredSource = !gathered.text().isBlank();
         }
         /*
          * The running facts, and only the ones this answer was judged to turn
@@ -1539,6 +1563,10 @@ public final class MaosServer {
                                          + stats.briefing(names, category) : "")
                 + (shareable && needs.wants("operations") ? scripts.briefing() : "")
                 + (instruction.isBlank() ? "" : WHOLE_BRIEFING)
+                // Only where it could be acted on. A model told it may write
+                // the sources, when no sources were gathered, is a model that
+                // will write one from memory.
+                + (gatheredSource ? Workshop.briefing() : "")
                 // Last, and on every request that could change anything: the
                 // two relations this machine is used on, which are not up for
                 // change however the request is phrased.
@@ -1589,12 +1617,33 @@ public final class MaosServer {
             }
             text = Scripts.without(text);
 
+            /*
+             * A change to the machine itself, if one was asked for.
+             *
+             * Before the other runners, because its output is the thing the
+             * model has to read to fix what it just wrote - a compiler error is
+             * only useful to whoever can still act on it. It writes into this
+             * account's own tree, builds there, and commits only if the build
+             * and every test passed. See Workshop.
+             */
+            var worker = workers.forAccount(account.id());
+            var change = workshop.apply(worker, text);
+            if (change.wrote()) {
+                // What was gathered described the machine before the change.
+                if (change.committed() && worker != null) contexts.stale(worker.branch());
+                System.out.printf("maos: %s %s%n", account.id(), change.said());
+            }
+
             // Anything the model asked a cloud for runs here, signed with this
             // account's credentials, and only the results go back upstream.
             var outcome = agent.run(account, text);
             var runs = runner.run(account, text);
             var onAgents = agents.run(account, text);
-            String results = outcome.transcript() + runs.transcript() + onAgents.transcript();
+            String results = (change.wrote()
+                        ? "WHAT HAPPENED WHEN THAT WAS BUILT:\n" + change.log()
+                          + "\n" + change.said() + "\n"
+                        : "")
+                    + outcome.transcript() + runs.transcript() + onAgents.transcript();
             if (!results.isBlank()) {
                 String followUp = base + "\n\nYOUR REPLY:\n" + text
                         + "\n\nRESULTS:\n" + results

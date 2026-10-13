@@ -220,31 +220,39 @@ final class Workshop {
 
     private record Ran(boolean ok, String out) {}
 
+    /**
+     * Run something and wait, but not forever.
+     *
+     * The output goes to a file rather than being read from a pipe, which looks
+     * like the long way round and is the only way the deadline means anything.
+     * Reading a pipe blocks until the far end closes it, and the far end is the
+     * process - so a version that read first and then waited had already waited
+     * for as long as the build took, whatever number it was given. A build that
+     * hung would hang the request behind it until somebody noticed.
+     */
     private Ran run(Path where, List<String> argv, long seconds) {
+        java.io.File log = null;
         try {
+            log = java.io.File.createTempFile("maos-build", ".log");
             var p = new ProcessBuilder(argv)
                     .directory(where.toFile())
                     .redirectErrorStream(true)
+                    .redirectOutput(log)
                     .start();
-            var out = new StringBuilder();
-            try (var r = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(p.getInputStream()))) {
-                String line;
-                while ((line = r.readLine()) != null) {
-                    // Only the tail is kept. A failing build prints its error
-                    // and then a hundred lines of what else it was doing, and
-                    // the part that says what is wrong is near the end.
-                    out.append(line).append('\n');
-                    if (out.length() > 20_000) out.delete(0, out.length() - 16_000);
-                }
-            }
             if (!p.waitFor(seconds, java.util.concurrent.TimeUnit.SECONDS)) {
                 p.destroyForcibly();
                 return new Ran(false, "gave up after " + seconds + " seconds");
             }
-            return new Ran(p.exitValue() == 0, out.toString());
+            // Only the tail is kept. A failing build prints its error and then a
+            // hundred lines of what else it was doing, and the part that says
+            // what is wrong is near the end.
+            String out = Files.readString(log.toPath());
+            if (out.length() > 20_000) out = out.substring(out.length() - 16_000);
+            return new Ran(p.exitValue() == 0, out);
         } catch (Exception x) {
             return new Ran(false, String.valueOf(x));
+        } finally {
+            if (log != null) log.delete();
         }
     }
 
