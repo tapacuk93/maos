@@ -678,6 +678,25 @@ SYM(backend_fetch):
         bl      SYM(u32_dec)
         mov     x22, x0
 
+        mov     x0, x22                 /* and what the screen can hold now */
+        LEA     x1, s_json_cols
+        bl      SYM(str_copy)
+        mov     x22, x0
+        bl      SYM(editor_fits)
+        mov     w23, w1                 /* rows, past the call below */
+        mov     w1, w0
+        mov     x0, x22
+        bl      SYM(u32_dec)
+        mov     x22, x0
+        mov     x0, x22
+        LEA     x1, s_json_rows2
+        bl      SYM(str_copy)
+        mov     x22, x0
+        mov     w1, w23
+        mov     x0, x22
+        bl      SYM(u32_dec)
+        mov     x22, x0
+
         mov     x0, x22
         LEA     x1, s_json_screens
         bl      SYM(str_copy)
@@ -1640,6 +1659,8 @@ s_json_base:        .asciz ",\"baseline\":\""
 s_json_ctx:         .asciz "\",\"context\":\""
 s_json_scale:       .asciz "\",\"scale\":"
 s_json_ink:         .asciz ",\"ink\":"
+s_json_cols:        .asciz ",\"cols\":"
+s_json_rows2:       .asciz ",\"visiblerows\":"
 s_json_screens:     .asciz ",\"screens\":"
 s_json_journal:     .asciz ",\"journal\":\""
 s_json_tail:        .asciz "\"}"

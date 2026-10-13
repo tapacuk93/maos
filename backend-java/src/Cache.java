@@ -14,7 +14,7 @@ import java.util.regex.Pattern;
  * for it, and the answer is the same for everyone, so the second person should
  * get it back immediately and for nothing.
  *
- * What is private is marked, not guessed. Text prefixed with $$ is a
+ * What is private is marked, not guessed. Text prefixed with ## is a
  * reference the model never reads; everything else the user has declared
  * ordinary by not marking it. So the rule is:
  *
@@ -34,7 +34,7 @@ import java.util.regex.Pattern;
 final class Cache {
 
     /** The mark that makes something private. */
-    static final Pattern MARKED = Pattern.compile("\\$\\$\\w+");
+    static final Pattern MARKED = Pattern.compile("##\\w+");
 
     /** One answer somebody already paid for. */
     record Entry(String text, String model, long madeAt, AtomicLong hits) {}

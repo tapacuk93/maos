@@ -37,13 +37,25 @@ class PreflightTest {
     }
 
     @Test
-    void aRequestAboutTheirOwnTextIsNotAboutTheMachine() {
+    void nothingToAskAboutMeansNoCall() {
         var p = on(PROJECT);
-        // Too short to be a description of a behaviour, so it never asks and
-        // never pays for the call.
-        assertEquals("", p.gather("wallet", "fix this"));
         assertEquals("", p.gather("wallet", ""));
         assertEquals("", p.gather("wallet", null));
+    }
+
+    @Test
+    void shortnessIsNotEvidenceOfAnything() throws Exception {
+        // There was a word count here once: below three words a request was
+        // assumed to be about the document. "larger font" is two words and is a
+        // request to change the machine; "can you explain what this function
+        // does to the array" is eleven about text on a screen. Length is not
+        // the signal, so nothing in this class may act on it.
+        var p = on(PROJECT);
+        String source = new String(java.nio.file.Files.readAllBytes(
+                PROJECT.resolve("backend-java/src/Preflight.java")),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertFalse(source.contains("MIN_WORDS"),
+                "deciding by length is the deciding model's job, not a constant's");
     }
 
     @Test

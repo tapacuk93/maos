@@ -79,14 +79,23 @@ final class Preflight {
      * what it is for. The names are deliberately about what somebody would want
      * them for rather than about which class produces them.
      */
-    static final Map<String, String> KINDS = new java.util.LinkedHashMap<>(Map.of(
-            "history", "what this person has been typing and pressing just now",
-            "clouds", "which clouds this account can run work on, and what sizes cost",
-            "machines", "what the backend can bring up, and how to ask for it",
-            "operations", "what the server already answers without a model",
-            "models", "what each model has been like at this kind of work",
-            "refusals", "what this person has told the system to stop doing",
-            "agents", "the machines this account has volunteered to do work"));
+    static final Map<String, String> KINDS = new java.util.LinkedHashMap<>();
+
+    private static void kind(String name, String what) {
+        KINDS.put(name, what);
+    }
+
+    static {
+        kind("appearance", "what size the text is set to and what colour, as numbers");
+        kind("screen", "how much the screen holds at that size, and how much is on it");
+        kind("history", "what this person has been typing and pressing just now");
+        kind("clouds", "which clouds this account can run work on, and what sizes cost");
+        kind("machines", "what the backend can bring up, and how to ask for it");
+        kind("operations", "what the server already answers without a model");
+        kind("models", "what each model has been like at this kind of work");
+        kind("refusals", "what this person has told the system to stop doing");
+        kind("agents", "the machines this account has volunteered to do work");
+    }
 
     /**
      * What a question turned out to need: files, and kinds of context.
@@ -109,14 +118,20 @@ final class Preflight {
     }
 
     /**
-     * Below this many words a request is about the document, not the machine.
+     * Nothing decides this but the model that is asked.
      *
-     * Cheap and roughly right. "fix this" is about the screen in front of them
-     * and reading the kernel to answer it would be absurd; the requests that
-     * need source are the ones that describe a behaviour of the system, and
-     * those are sentences.
+     * There was a word count here: below three words, a request was assumed to
+     * be about the document and no source was gathered. It was cheap and it was
+     * wrong in exactly the case this mechanism exists for. "larger font" is two
+     * words and is a request to change the machine; so is "fix the keyboard",
+     * and so is "slower". Meanwhile "can you explain what this function does to
+     * the array" is eleven words about text on a screen.
+     *
+     * Length is not the signal. What the request is about is the signal, and
+     * working that out is what the asked model is for - so it is asked, and the
+     * answer is remembered per tree, which makes a novel phrasing cost one fast
+     * call and every repeat cost nothing.
      */
-    private static final int MIN_WORDS = 3;
 
     private final Aicoin aicoin;
     private final Path root;
@@ -184,7 +199,6 @@ final class Preflight {
         var nothing = new Gathered("", Needs.undecided());
         if (files.isEmpty()) return nothing;
         if (instruction == null || instruction.isBlank()) return nothing;
-        if (instruction.strip().split("\\s+").length < MIN_WORDS) return nothing;
         if (room < 2_000) return nothing;
 
         List<String> named = worker == null ? null : worker.recall(instruction);
@@ -333,17 +347,22 @@ final class Preflight {
                 question about the keyboard on real hardware is about the driver
                 that reads it, not the file that lists key names.
 
-                Name history when the request refers to something that just
-                happened - "undo that", "what I typed before", "put it back" -
-                or when what they want depends on what they were doing rather
-                than on what is on the screen now.
+                Work out what the answer turns on, and name that. Not what
+                the request mentions - what the answer would be wrong without.
 
-                Name clouds, machines or agents only for a request about running
-                something somewhere. Name operations when they are asking what
-                the system can already do, or asking for something that sounds
-                like it might already exist. Name models when the request is
-                about which model should answer. Name refusals when they are
-                taking something back or asking what they have taken back.
+                "set the size to 4" turns on nothing: the request contains its
+                own answer. "larger" turns on the size it is at, so name
+                appearance. "I can't read this" turns on the size, how much the
+                screen holds and how much is on it, because the comfortable
+                answer for a full screen of long lines is not the comfortable
+                answer for three words - name appearance and screen. "undo
+                that" turns on what just happened, so name history.
+
+                The same subject can need nothing one time and three things the
+                next, which is why this is asked rather than decided in advance
+                by whoever wrote the system. If a future request turns on
+                something not on this list, say so in a line of your own and it
+                will be there next time.
 
                 Every line you name is read in full and takes room from the
                 others, and every one that was not needed is something the

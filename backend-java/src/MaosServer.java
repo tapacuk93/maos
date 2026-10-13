@@ -928,8 +928,8 @@ public final class MaosServer {
     /**
      * A request that is this person's alone.
      *
-     * $$ already marks text the server may not keep - see Cache. Three of them
-     * at the front of a request mean the same thing about the request itself:
+     * ## already marks text the server may not keep - see Cache. Two dollars
+     * at the front of a request mean the same kind of thing about the request:
      * build this for me, and for nobody else. Nothing is cached from it,
      * nothing is counted towards other people wanting it, no operation is
      * taught out of it, and any change it makes goes to this account's own
@@ -942,13 +942,13 @@ public final class MaosServer {
      * both directions at once.
      */
     static boolean personal(String instruction) {
-        return instruction != null && instruction.stripLeading().startsWith("$$$");
+        return instruction != null && instruction.stripLeading().startsWith("$$");
     }
 
     /** The request without the mark, which is what anybody should be shown. */
     static String withoutMark(String instruction) {
         if (!personal(instruction)) return instruction;
-        return instruction.stripLeading().substring(3).strip();
+        return instruction.stripLeading().substring(2).strip();
     }
 
     static boolean wholeIn(String reply) {
@@ -1147,7 +1147,8 @@ public final class MaosServer {
             they typed vanishes and the colour changes, which is the whole of
             what they asked for.
 
-            Worth scripting: the answer depends on nothing but the colour named.
+            Worth storing by the rule below: the answer depends on nothing but
+            the colour named.
 
             HOW BIG IT IS
 
@@ -1169,9 +1170,16 @@ public final class MaosServer {
             Nothing else goes in the reply. The line they typed disappears and
             the text changes size, which is all they asked for.
 
-            Worth scripting, and worth noticing that it cannot be: the answer
-            depends on the size it is at now, so a stored answer would be right
-            once and wrong afterwards. Leave this one to be asked.
+            Whether this is worth storing is yours to judge and the judgement is
+            not obvious. "set the size to 4" is a function of the request alone.
+            "larger" is a function of the size it is at, which a stored answer
+            cannot see. And "I can't read this" is a function of the size, the
+            screen, how much is on it and how this person has been setting it -
+            which is a question for you every time, and the right answer to it
+            is not the same number for everybody.
+
+            Judge it by the rule under TEACHING THE SERVER rather than by which
+            of those it resembles.
             """;
 
 
@@ -1289,11 +1297,11 @@ public final class MaosServer {
                  Use only ASCII letters, digits and simple punctuation - the editor renders a 5x7 \
                 bitmap font and cannot draw anything else.
 
-                Anything written as $$name is a reference to text you cannot see and will never \
-                be shown. Treat it as a name for something that is there: write $$name where the \
+                Anything written as ##name is a reference to text you cannot see and will never \
+                be shown. Treat it as a name for something that is there: write ##name where the \
                 thing belongs and the editor puts the real content in on its side. Do not ask \
                 what is in it, do not guess at it, and do not work around it by inventing a \
-                value - $$name is the answer, and it resolves where you cannot reach.
+                value - ##name is the answer, and it resolves where you cannot reach.
 
                 """);
         if (!baseline.isBlank()) {
@@ -1358,16 +1366,44 @@ public final class MaosServer {
             prompt.append(gathered.text());
             needs = gathered.needs();
         }
-        prompt.append("THE EDITOR IS:\n")
-              .append("  text size ").append(parseInt(in.getOrDefault("scale", "2"), 2))
-              .append(" of 8\n")
-              .append("  on screen ").append(screen).append(" of ")
-              .append(in.getOrDefault("screens", "1")).append("\n\n");
-        // Each of these used to go on every request. Fourteen thousand
-        // characters of what this account can run work on, in front of "make
-        // this sentence shorter" - which is not only waste: a model reading
-        // five briefings it does not need attends to five things that are not
-        // the question.
+        /*
+         * The running facts, and only the ones this answer was judged to turn
+         * on. Nothing here decides which: that was asked, before any of this
+         * was assembled, by whoever could tell what the answer depends on. A
+         * list written here would be somebody guessing in advance for every
+         * request that will ever be made, which is the thing the preparation
+         * step exists instead of.
+         */
+        int scale = parseInt(in.getOrDefault("scale", "2"), 2);
+        if (needs.wants("appearance")) {
+            prompt.append("THE TEXT IS:\n")
+                  .append("  at size ").append(scale).append(" of 8\n")
+                  .append("  in palette slot ").append(in.getOrDefault("ink", "0"))
+                  .append(" of 0 to 9\n\n");
+        }
+        if (needs.wants("screen")) {
+            int cols = parseInt(in.getOrDefault("cols", "0"), 0);
+            int rows = parseInt(in.getOrDefault("visiblerows", "0"), 0);
+            int longest = 0, lines = 1;
+            for (String line : context.split("\n", -1)) {
+                longest = Math.max(longest, line.length());
+                lines++;
+            }
+            prompt.append("THE SCREEN:\n");
+            if (cols > 0 && rows > 0) {
+                prompt.append("  holds ").append(cols).append(" characters across and ")
+                      .append(rows).append(" lines down at the size it is at\n")
+                      // A cell is as many pixels wide as the size says, so a
+                      // step up costs a proportional share of both.
+                      .append("  would hold about ").append(cols * scale / (scale + 1))
+                      .append(" across and ").append(rows * scale / (scale + 1))
+                      .append(" down one size larger\n");
+            }
+            prompt.append("  has ").append(lines).append(" line(s) on it, the longest ")
+                  .append(longest).append(" characters\n")
+                  .append("  is screen ").append(screen).append(" of ")
+                  .append(in.getOrDefault("screens", "1")).append("\n\n");
+        }
         if (needs.wants("refusals")) prompt.append(refusals.briefing(account.id()));
         if (needs.wants("history")) prompt.append(journal.briefing(account, screen));
         if (needs.wants("machines")) prompt.append(runner.briefing(account));
@@ -1399,7 +1435,7 @@ public final class MaosServer {
 
         // Somebody may already have paid for this one.  Only ever true when
         // nothing of theirs went into the asking - see Cache.shareable.
-        // Three dollars at the front is somebody saying this one is theirs. It
+        // Two dollars at the front is somebody saying this one is theirs. It
         // is not a hint: it turns off the cache, the counting, the scripting
         // and the promotion, all of which exist to carry one person's answer to
         // everybody else.

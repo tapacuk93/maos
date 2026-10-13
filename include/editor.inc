@@ -81,8 +81,8 @@
  * remember which is which: red is a line holding something the far side never
  * sees, blue is a line whose request is this person's alone.
  */
-#define COL_MARK_PRIV    0xFF5A2E2E      /* $$  - a secret of theirs */
-#define COL_MARK_MINE    0xFF2E3A5A      /* $$$ - their coins, their branch */
+#define COL_MARK_PRIV    0xFF5A2E2E      /* ## - a secret, on that line only */
+#define COL_MINE_BG      0xFF141C2E      /* $$ - the whole screen, their work */
 
 /* Colours as movz/movk halves: a 32-bit constant needs two instructions, and
    spelling it out beats relying on a literal pool that only one of our two
@@ -101,8 +101,13 @@
 #define COL_SEL_HI      0xFF2E
 #define COL_MARK_PRIV_LO 0x2E2E
 #define COL_MARK_PRIV_HI 0xFF5A
-#define COL_MARK_MINE_LO 0x3A5A
-#define COL_MARK_MINE_HI 0xFF2E
+#define COL_MINE_BG_LO   0x1C2E
+#define COL_MINE_BG_HI   0xFF14
+/* The same two, bright enough to read as text in the bar. */
+#define COL_MARK_MINE_LO 0xB8E2
+#define COL_MARK_MINE_HI 0xFF8A
+#define COL_MARK_PRIV_LO2 0x8A8A
+#define COL_MARK_PRIV_HI2 0xFFE2
 
 .macro  LDCOL reg, lo, hi
         mov     \reg, #\lo

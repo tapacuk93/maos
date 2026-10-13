@@ -747,6 +747,43 @@ final class Scripts {
                 free variables are refused. When in doubt, do not script it: a
                 slow correct answer beats a fast wrong one, and the user has no
                 way to tell the server it learned something badly.
+
+                THE RULE FOR DECIDING
+
+                One question, and it is not "is this common" or "is this
+                simple":
+
+                    Is the right answer a function of the request alone?
+
+                If the same words should always produce the same answer, store
+                it. "c hello world" is the same program every time. "colours
+                blue" is the same slot every time. Nothing about the machine,
+                the moment or the person changes what is correct, so a model
+                being asked again is a model being paid to agree with itself.
+
+                If the right answer depends on anything that was not in the
+                request, do not store it - and say why rather than storing a
+                version that is right today. The things that make an answer
+                depend on more than its words:
+
+                  - the state it starts from. "larger", "undo that", "the other
+                    one" are about where things are now, and a stored answer
+                    cannot see that.
+                  - the screen. "make this fit", "shorten it" depend on what is
+                    there and how much room there is.
+                  - the person. "comfortable", "like last time", "the way I
+                    usually have it" are not the same for two people, and are
+                    not the same for one person on two machines.
+                  - judgement that should stay live. If a better answer exists
+                    and you would want to give it next month, storing this one
+                    is deciding that it should not be given.
+
+                A request can be both. "set the size to 4" is a function of its
+                words and belongs in a script; "make it comfortable to read" is
+                the same subject and belongs to you, every time, because the
+                answer is a number you work out from the screen in front of
+                them. Write the first one and leave the second alone; do not
+                write one pattern that swallows both.
                 """);
         if (!scripts.isEmpty()) {
             b.append("\nalready scripted, so do not teach these again:\n");

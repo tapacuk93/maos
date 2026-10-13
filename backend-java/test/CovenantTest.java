@@ -47,8 +47,8 @@ class CovenantTest {
         String b = Covenant.briefing();
         assertTrue(b.contains("privacy"), b);
         assertTrue(b.contains("isolation"), b);
-        assertTrue(b.contains("$$"), "a model has to know what the marks are");
-        assertTrue(b.contains("$$$"));
+        assertTrue(b.contains("##"), "a model has to know what the marks are");
+        assertTrue(b.contains("$$"));
     }
 
     @Test

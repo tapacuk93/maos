@@ -808,20 +808,11 @@ ed_band:
         cmp     w11, w9
         b.hs    .Lband_none             /* two characters is the shortest mark */
         ldrb    w12, [x10, w19, uxtw]
-        cmp     w12, #'$'
+        cmp     w12, #'#'
         b.ne    .Lband_none
         ldrb    w12, [x10, w11, uxtw]
-        cmp     w12, #'$'
+        cmp     w12, #'#'
         b.ne    .Lband_none
-        add     w11, w11, #1
-        cmp     w11, w9
-        b.hs    .Lband_priv
-        ldrb    w12, [x10, w11, uxtw]
-        cmp     w12, #'$'
-        b.ne    .Lband_priv
-        mov     w0, #2
-        b       .Lband_out
-.Lband_priv:
         mov     w0, #1
         b       .Lband_out
 .Lband_none:
@@ -829,6 +820,51 @@ ed_band:
 .Lband_out:
         ldr     x19, [sp, #16]
         ldp     x29, x30, [sp], #32
+        ret
+
+/*
+ * editor_mode - w0 = 1 when this screen is asking for work of its own.
+ *
+ * A line beginning $$ says the request on it is this person's alone: their
+ * branch, their coins, nothing kept and nothing carried to anybody else. That
+ * is a property of the whole exchange rather than of one line, which is why it
+ * colours the whole screen rather than banding a row - somebody who has typed
+ * it should not have to look for where they typed it to know it is on.
+ */
+        .globl  SYM(editor_mode)
+SYM(editor_mode):
+        stp     x29, x30, [sp, #-16]!
+        mov     x29, sp
+        bl      ed_cur
+        ldr     w9, [x0, #SCR_LEN_OFF]
+        add     x10, x0, #SCR_TEXT_OFF
+        mov     w11, #0                 /* index */
+        mov     w12, #1                 /* at the start of a line */
+1:      cmp     w11, w9
+        b.hs    3f
+        ldrb    w13, [x10, w11, uxtw]
+        cmp     w13, #'\n'
+        b.ne    2f
+        mov     w12, #1
+        add     w11, w11, #1
+        b       1b
+2:      cbz     w12, 4f
+        mov     w12, #0
+        cmp     w13, #'$'
+        b.ne    4f
+        add     w14, w11, #1
+        cmp     w14, w9
+        b.hs    4f
+        ldrb    w13, [x10, w14, uxtw]
+        cmp     w13, #'$'
+        b.ne    4f
+        mov     w0, #1                  /* found one, and one is enough */
+        ldp     x29, x30, [sp], #16
+        ret
+4:      add     w11, w11, #1
+        b       1b
+3:      mov     w0, #0
+        ldp     x29, x30, [sp], #16
         ret
 
 /* ed_home - the very start of this screen, scrolled back to the top */
@@ -1308,6 +1344,25 @@ SYM(editor_scale):
         str     w0, [x9, #EDS_SCALE]
 9:      ret
 
+/*
+ * editor_fits - w0 = columns across, w1 = rows down, at the size it is now.
+ *
+ * What the screen can actually hold, which is the thing a question about
+ * comfort turns on. "larger" can be answered from the size alone; "I can't
+ * read this" and "make it fit" cannot - those depend on how much room there is
+ * and how much is in it, and a far side that was told only a number from one to
+ * eight was being asked to judge comfort with its eyes shut.
+ *
+ * Written by the renderer, because it is the renderer that works out how many
+ * cells fit and nothing else should compute it a second time and disagree.
+ */
+        .globl  SYM(editor_fits)
+SYM(editor_fits):
+        LEA     x9, ed_state
+        ldr     w0, [x9, #16]
+        ldr     w1, [x9, #12]
+        ret
+
 /* editor_colour_get - w0 = the palette slot in use. */
         .globl  SYM(editor_colour_get)
 SYM(editor_colour_get):
@@ -1779,14 +1834,28 @@ SYM(editor_render):
         str     w0, [sp, #152]
         str     w1, [sp, #156]
 
-        mov     x0, x19                 /* backdrop */
+        mov     x0, x19                 /* backdrop, which says what mode this
+                                           screen is in: see editor_mode */
         mov     w1, w20
         mov     w2, #0
         mov     w3, #0
         mov     w4, w21
         mov     w5, w22
-        LDCOL   w6, COL_BG_LO, COL_BG_HI
-        bl      SYM(fb_fill)
+        stp     x0, x1, [sp, #160]
+        bl      SYM(editor_mode)
+        mov     w9, w0
+        ldp     x0, x1, [sp, #160]
+        mov     x0, x19
+        mov     w1, w20
+        mov     w2, #0
+        mov     w3, #0
+        mov     w4, w21
+        mov     w5, w22
+        cbz     w9, 1f
+        LDCOL   w6, COL_MINE_BG_LO, COL_MINE_BG_HI
+        b       2f
+1:      LDCOL   w6, COL_BG_LO, COL_BG_HI
+2:      bl      SYM(fb_fill)
 
         mov     x0, x19                 /* screen bar */
         mov     w1, w20
@@ -1889,13 +1958,13 @@ SYM(editor_render):
         add     w17, w17, w13
 
 /*
- * A line that is marked wears its mark across the whole width.
+ * A line holding a secret wears it across the whole width.
  *
  * Behind the text rather than in it, because what is being said is about the
- * line and not about any character of it: this line is private, or this line is
- * yours alone. Colouring the letters would say it quietly, in a place somebody
- * has to be looking already, and these two are exactly the lines nobody should
- * be able to be surprised by.
+ * line and not about any character of it: nothing on this line leaves the
+ * machine. Colouring the letters would say it quietly, in a place somebody has
+ * to be looking already, and this is the one line nobody should ever be
+ * surprised about.
  *
  * Painted on every row the line occupies, wraps included - the band follows the
  * line rather than the row, which is why it is worked out once where the line
@@ -1906,12 +1975,8 @@ SYM(editor_render):
         ldr     w11, [sp, #124]
         cbz     w11, .Lno_band
         stp     x16, x17, [sp, #160]
-        sub     w11, w11, #1            /* 0 = private, 1 = theirs alone */
-        cbnz    w11, 8f
         LDCOL   w6, COL_MARK_PRIV_LO, COL_MARK_PRIV_HI
-        b       9f
-8:      LDCOL   w6, COL_MARK_MINE_LO, COL_MARK_MINE_HI
-9:      mov     x0, x19
+        mov     x0, x19
         mov     w1, w20
         mov     w2, #0                  /* the whole width, not the glyph */
         mov     w3, w17
@@ -2059,6 +2124,47 @@ SYM(editor_render):
         b       .Lbar_loop
 
 /*
+ * The marks this screen is wearing, next to the brand.
+ *
+ * A mode somebody has to remember they turned on is a mode that surprises them
+ * later. The screen already says it - blue for a request that is theirs alone,
+ * a red band on a line that holds a secret - and this says it a second way, in
+ * the one place that is always the same place.
+ *
+ * Only when they are on. An indicator that is always there is one nobody reads,
+ * and these two are exactly the ones that have to be read.
+ */
+        bl      SYM(editor_mode)
+        cbz     w0, 1f
+        mov     x0, x19
+        mov     w1, w20
+        ldr     w2, [sp, #132]          /* just past the brand */
+        mov     w9, #6
+        mul     w2, w2, w9
+        ldr     w3, [sp, #144]
+        lsl     w3, w3, #1
+        ldr     w4, [sp, #144]
+        LDCOL   w5, COL_MARK_MINE_LO, COL_MARK_MINE_HI
+        LEA     x6, s_mark_mine
+        bl      SYM(font_draw_text)
+1:
+        mov     w0, #0
+        bl      ed_band                 /* does the first line hold a secret? */
+        cbz     w0, 2f
+        mov     x0, x19
+        mov     w1, w20
+        ldr     w2, [sp, #132]
+        mov     w9, #9
+        mul     w2, w2, w9
+        ldr     w3, [sp, #144]
+        lsl     w3, w3, #1
+        ldr     w4, [sp, #144]
+        LDCOL   w5, COL_MARK_PRIV_LO2, COL_MARK_PRIV_HI2
+        LEA     x6, s_mark_priv
+        bl      SYM(font_draw_text)
+2:
+
+/*
  * And whoever the far side says is sitting here, at the other end of the bar.
  *
  * Right-aligned, so it does not move when a screen is opened and the digits
@@ -2105,6 +2211,8 @@ s_brand:        .asciz "MAOS"
         CSTR
 s_jn_ins:       .asciz "ins "
 s_jn_del:       .asciz "del "
+s_mark_mine:    .asciz "$$"
+s_mark_priv:    .asciz "##"
 s_jn_key:       .asciz "key "
 /*
  * What each command is called when it is written down.

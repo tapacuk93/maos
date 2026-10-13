@@ -134,3 +134,8 @@ extern "C" {
     pub fn editor_scale(size: u32);
     pub fn editor_scale_get() -> u32;
 }
+
+extern "C" {
+    /// 1 when this screen carries a request that is the person's alone.
+    pub fn editor_mode() -> u32;
+}

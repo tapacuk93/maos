@@ -21,7 +21,7 @@ import java.util.Map;
  *
  * Each is a relation rather than a capability. "The caret blinks" is a
  * behaviour: somebody can want it differently and nobody is worse off. "Text
- * marked $$ is never sent" is not a behaviour - it is the reason somebody was
+ * marked ## is never sent" is not a behaviour - it is the reason somebody was
  * willing to type a password into a text editor that talks to a server. Change
  * it and the thing that was true when they typed it stops being true
  * retroactively, which no amount of agreement afterwards can repair.
@@ -53,16 +53,16 @@ final class Covenant {
 
     static {
         term("privacy",
-             "text written as $$name is never sent anywhere. The server does not "
+             "text written as ##name is never sent anywhere. The server does not "
              + "see it, no model is shown it, and it is substituted back on the "
              + "person's own machine",
              "it is the reason somebody is willing to put a password, a key or a "
              + "private note in a document that talks to a server. If it were "
-             + "ever sent, every $$ anybody had already typed would retroactively "
+             + "ever sent, every ## anybody had already typed would retroactively "
              + "have been a mistake they had no way of knowing they were making");
 
         term("isolation",
-             "a request marked $$$ is developed for that person alone. It goes to "
+             "a request marked $$ is developed for that person alone. It goes to "
              + "their own branch, spends their own coins, and nothing from it is "
              + "cached, counted towards anybody else wanting it, scripted or "
              + "promoted towards the project",

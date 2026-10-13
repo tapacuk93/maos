@@ -12,9 +12,9 @@ class CacheTest {
     @Test
     void aMarkedReferenceMakesAnExchangePrivate() {
         assertTrue(Cache.shareable("write a hello world"));
-        assertFalse(Cache.shareable("summarise $$notes"),
-                "$$notes names something only this person has");
-        assertFalse(Cache.shareable("fine", "but $$this is not"));
+        assertFalse(Cache.shareable("summarise ##notes"),
+                "##notes names something only this person has");
+        assertFalse(Cache.shareable("fine", "but ##this is not"));
     }
 
     @Test
